@@ -24,6 +24,9 @@ final class AppState {
     var gamesByBottle: [String: [SteamGame]] = [:]
     /// The Steam account's games per bottle, installed or not (SteamOwnedLibrary, highball#199).
     var steamOwnedByBottle: [String: [OwnedSteamGame]] = [:]
+    /// What Steam's app data says about each owned game's Mac build (MacAppInfoBuild), by appid.
+    /// Built with steamOwnedByBottle, so the library's tiles look it up instead of searching.
+    var macAppInfoByAppID: [Int: MacAppInfoBuild] = [:]
     var gameDB = GameDB(directories: [])
 
     // Long-running work
@@ -370,13 +373,15 @@ final class AppState {
 
     /// Play on Mac leads for this item (see MacSteamBuild.leads).
     func prefersMacBuild(_ item: LibraryItem) -> Bool {
-        MacSteamBuild.leads(entry: gameDB.entry(for: item), installedOnMac: item.installedOnMac)
+        MacSteamBuild.leads(entry: gameDB.entry(for: item), installedOnMac: item.installedOnMac,
+                            appInfo: item.steamAppID.flatMap { macAppInfoByAppID[$0] })
     }
 
     func macSteamBuild(for item: LibraryItem) -> MacSteamBuild? {
         guard item.source == .steam else { return nil }
         return MacSteamBuild.resolve(entry: gameDB.entry(for: item), storeMac: item.steamAppID.flatMap { macFlags[$0] },
-                                     installedOnMac: item.installedOnMac)
+                                     installedOnMac: item.installedOnMac,
+                                     appInfo: item.steamAppID.flatMap { macAppInfoByAppID[$0] })
     }
 
     /// The verified fix recipe for a library item, if the db has one (db entry id == recipe id).
@@ -542,6 +547,8 @@ final class AppState {
             await MainActor.run {
                 guard let self, owned != self.steamOwnedByBottle else { return }
                 self.steamOwnedByBottle = owned
+                self.macAppInfoByAppID = Dictionary(owned.values.joined().map { ($0.appid, $0.macBuild) },
+                                                    uniquingKeysWith: { a, _ in a })
                 self.rebuildLibrary()
             }
         }

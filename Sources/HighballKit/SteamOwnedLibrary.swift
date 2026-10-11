@@ -10,10 +10,13 @@ public struct OwnedSteamGame: Sendable, Hashable {
     /// appinfo's `common.oslist` names macOS. Not proof of a Mac build that still runs (Portal's
     /// 32-bit one is still listed), only which games are worth asking the store about (MacFlagStore).
     public var listsMac = false
+    /// What appinfo says about the Mac build: 64-bit, 32-bit only, or none (MacAppInfoBuild).
+    public var macBuild: MacAppInfoBuild = .absent
 
-    public init(appid: Int, name: String, localCapsule: URL? = nil, localHeader: URL? = nil, listsMac: Bool = false) {
+    public init(appid: Int, name: String, localCapsule: URL? = nil, localHeader: URL? = nil, listsMac: Bool = false,
+                macBuild: MacAppInfoBuild = .absent) {
         self.appid = appid; self.name = name; self.localCapsule = localCapsule; self.localHeader = localHeader
-        self.listsMac = listsMac
+        self.listsMac = listsMac; self.macBuild = macBuild
     }
 
     /// Local art first: newer apps keep theirs at hashed store paths, so the fixed CDN name
@@ -57,7 +60,8 @@ public enum SteamOwnedLibrary {
             let art = artwork(in: cache.appending(path: String(appid)))
             return OwnedSteamGame(appid: appid, name: name, localCapsule: art["library_600x900.jpg"],
                                   localHeader: art["library_header.jpg"] ?? art["header.jpg"],
-                                  listsMac: app.oslist?.lowercased().contains("macos") ?? false)
+                                  listsMac: app.oslist?.lowercased().contains("macos") ?? false,
+                                  macBuild: app.macBuild)
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -95,6 +99,14 @@ public enum SteamAppInfo {
         public var name: String?
         public var type: String?
         public var oslist: String?
+        /// `common.osextended`: "macos64", "macosapplesilicon" and "macosnotarized" among others.
+        public var osextended: String? = nil
+        /// The `osarch` of each macOS launch entry under `config.launch`, "" for one naming none.
+        public var macLaunchArchs: [String] = []
+
+        public var macBuild: MacAppInfoBuild {
+            MacAppInfoBuild(oslist: oslist, osextended: osextended, macLaunchArchs: macLaunchArchs)
+        }
     }
 
     public struct ParseError: Error, CustomStringConvertible {
@@ -129,8 +141,14 @@ public enum SteamAppInfo {
             if let wanted, !wanted.contains(appid) { continue }
             r.offset += 4 + 4 + 8 + 20 + 4 + 20
             let root = try r.object(strings)
-            let common = (root["appinfo"]?.object ?? root)["common"]?.object
-            apps[appid] = App(name: common?["name"]?.string, type: common?["type"]?.string, oslist: common?["oslist"]?.string)
+            let info = root["appinfo"]?.object ?? root
+            let common = info["common"]?.object
+            let macArchs = (info["config"]?.object?["launch"]?.object ?? [:]).values
+                .compactMap { $0.object?["config"]?.object }
+                .filter { ($0["oslist"]?.string ?? "").lowercased().contains("macos") }
+                .map { $0["osarch"]?.string ?? "" }.sorted()
+            apps[appid] = App(name: common?["name"]?.string, type: common?["type"]?.string, oslist: common?["oslist"]?.string,
+                              osextended: common?["osextended"]?.string, macLaunchArchs: macArchs)
         }
         return apps
     }

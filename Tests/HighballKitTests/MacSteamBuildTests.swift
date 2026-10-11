@@ -103,6 +103,46 @@ final class MacSteamBuildTests: XCTestCase {
         XCTAssertNil(MacSteam.app(among: []))
     }
 
+    /// Steam's own data, read the way Steam for Mac reads it, decides before the store page.
+    /// LEGO Jurassic World's store page leaves macOS out while Steam for Mac installs its 64-bit
+    /// build (highball#310), and Stacking's store page lists macOS for a 32-bit build no current
+    /// Mac runs, so the Windows version has to lead (highball#316).
+    func testSteamsOwnDataDecidesBeforeTheStorePage() throws {
+        XCTAssertEqual(MacSteamBuild.resolve(entry: nil, storeMac: false, appInfo: .runnable), .inAppInfo)
+        XCTAssertEqual(MacSteamBuild.resolve(entry: nil, storeMac: nil, appInfo: .runnable), .inAppInfo)
+        XCTAssertNil(MacSteamBuild.resolve(entry: nil, storeMac: true, appInfo: .only32Bit), "a 32-bit Mac build is no Mac build")
+        XCTAssertEqual(MacSteamBuild.resolve(entry: nil, storeMac: true, appInfo: .absent), .onStore, "no Mac data: the store as before")
+        XCTAssertEqual(MacSteamBuild.resolve(entry: nil, storeMac: true, appInfo: nil), .onStore, "data not in hand: the store as before")
+        XCTAssertNil(MacSteamBuild.resolve(entry: nil, storeMac: false, appInfo: .absent))
+
+        // A curated row still wins both ways.
+        let curated = try entry(#"{"id":"x","title":"X","steam_appid":1,"status":"community","nativeMac":{"available":true,"where":"Steam"}}"#)
+        XCTAssertEqual(MacSteamBuild.resolve(entry: curated, storeMac: nil, appInfo: .only32Bit), .inDatabase)
+        let retired = try entry(#"{"id":"x","title":"X","steam_appid":1,"status":"community","nativeMac":{"available":false}}"#)
+        XCTAssertNil(MacSteamBuild.resolve(entry: retired, storeMac: nil, appInfo: .runnable))
+    }
+
+    func testAnInstalled32BitMacBuildDoesNotLead() throws {
+        XCTAssertEqual(MacSteamBuild.resolve(entry: nil, storeMac: nil, installedOnMac: true, appInfo: .only32Bit), .installed,
+                       "it is installed, the page says so")
+        XCTAssertFalse(MacSteamBuild.leads(entry: nil, installedOnMac: true, appInfo: .only32Bit), "but it can't run, so Play is the Windows one")
+        XCTAssertTrue(MacSteamBuild.leads(entry: nil, installedOnMac: true, appInfo: .runnable))
+        let curated = try entry(#"{"id":"x","title":"X","steam_appid":1,"status":"community","nativeMac":{"available":true,"where":"Steam"}}"#)
+        XCTAssertTrue(MacSteamBuild.leads(entry: curated, installedOnMac: true, appInfo: .only32Bit), "a curated row outranks the data")
+    }
+
+    func testReadsSteamsMacMarks() {
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows,macos", osextended: "macos64,macosnotarized", macLaunchArchs: []), .runnable)
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows,macos", osextended: "macosapplesilicon", macLaunchArchs: []), .runnable)
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows", osextended: "", macLaunchArchs: ["64"]), .runnable)
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows,macos,linux", osextended: nil, macLaunchArchs: [""]), .only32Bit)
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows,macos", osextended: "", macLaunchArchs: []), .only32Bit)
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows", osextended: nil, macLaunchArchs: [""]), .only32Bit,
+                       "a macOS launch entry is a Mac build even when oslist forgets it")
+        XCTAssertEqual(MacAppInfoBuild(oslist: "windows,linux", osextended: "", macLaunchArchs: []), .absent)
+        XCTAssertEqual(MacAppInfoBuild(oslist: nil, osextended: nil, macLaunchArchs: []), .absent)
+    }
+
     func testRowCanRetireAPortTheStoreStillLists() throws {
         let retired = try entry(#"{"id":"x","title":"X","steam_appid":1,"status":"community","nativeMac":{"available":false,"note":"32-bit, stopped running with Catalina"}}"#)
         XCTAssertNil(MacSteamBuild.resolve(entry: retired, storeMac: true))
@@ -163,6 +203,10 @@ final class MacSteamBuildTests: XCTestCase {
         let fromStore = try XCTUnwrap(GamePageCopy.macBuild(.onStore, entry: nil, myChip: "Apple M1 Pro", macOS: "26.6.2"))
         XCTAssertNil(fromStore.requirements)
         XCTAssertEqual(fromStore.source, "Steam's store page lists macOS for it.")
+
+        let fromData = try XCTUnwrap(GamePageCopy.macBuild(.inAppInfo, entry: nil, myChip: "Apple M1 Pro", macOS: "26.6.2"))
+        XCTAssertEqual(fromData.headline, "There is a native Mac build on Steam.")
+        XCTAssertEqual(fromData.source, "Steam's own data marks a Mac build that runs on current macOS.")
 
         let installed = try XCTUnwrap(GamePageCopy.macBuild(.installed, entry: hades, myChip: "Apple M1 Pro", macOS: "26.6.2"))
         XCTAssertEqual(installed.headline, "Installed in Steam for Mac.")

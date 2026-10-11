@@ -66,6 +66,7 @@ public enum GamePageCopy {
         let source = switch build {
         case .installed: "Steam for Mac lists it as installed."
         case .inDatabase: "From the compatibility database."
+        case .inAppInfo: "Steam's own data marks a Mac build that runs on current macOS."
         case .onStore: "Steam's store page lists macOS for it."
         }
         return MacBuild(

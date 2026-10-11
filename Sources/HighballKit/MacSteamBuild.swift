@@ -4,23 +4,28 @@ import Foundation
 /// Mac Steam app installs and runs without Wine. Only Steam builds count; a native edition sold
 /// elsewhere (Death Stranding's on the Mac App Store) is a different purchase and isn't marked.
 ///
-/// Two sources, curated first:
+/// Three sources, curated first:
 /// - the database row's `nativeMac`, when its `where` names Steam; a row can also say
 ///   `"available": false` for a port that no longer runs;
-/// - otherwise the Steam store's `platforms.mac` for the appid. The store page is what Valve and
-///   publishers keep current: Steam's own appinfo still lists macOS for Portal, whose 32-bit Mac
-///   build stopped running with Catalina, while the store page for 400 no longer does
-///   (checked 2026-09-24).
+/// - then Steam's own app data, the way Steam for Mac reads it (MacAppInfoBuild): a build marked
+///   64-bit counts even when the store page leaves macOS out (LEGO Jurassic World, highball#310),
+///   and a 32-bit one never counts, since macOS stopped running those with Catalina (Stacking,
+///   highball#316, and Portal);
+/// - otherwise the Steam store's `platforms.mac` for the appid, for a game whose app data isn't
+///   in hand.
 public enum MacSteamBuild: Equatable, Sendable {
     /// Steam for Mac has it installed (MacSteam): no need to ask anyone.
     case installed
     /// The database row says so (and may carry requirements in its note).
     case inDatabase
+    /// Steam's app data marks a Mac build that runs on current macOS.
+    case inAppInfo
     /// Steam's store page lists macOS.
     case onStore
 
     /// Pure. nil: no Mac build on Steam known, or the store hasn't been asked yet.
-    public static func resolve(entry: GameDBEntry?, storeMac: Bool?, installedOnMac: Bool = false) -> MacSteamBuild? {
+    public static func resolve(entry: GameDBEntry?, storeMac: Bool?, installedOnMac: Bool = false,
+                               appInfo: MacAppInfoBuild? = nil) -> MacSteamBuild? {
         if installedOnMac { return .installed }
         if let native = entry?.nativeMac {
             guard native.available else { return nil }
@@ -28,15 +33,50 @@ public enum MacSteamBuild: Equatable, Sendable {
             let stores = (native.where ?? "Steam").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             if stores.contains("steam") { return .inDatabase }
         }
-        return storeMac == true ? .onStore : nil
+        switch appInfo {
+        case .runnable?: return .inAppInfo
+        case .only32Bit?: return nil
+        case .absent?, nil: return storeMac == true ? .onStore : nil
+        }
     }
 
     /// Whether Play starts the native build: Steam for Mac has it installed, and the row does not
     /// say the Mac build is the wrong one to play. The Binding of Isaac's Mac build stops at
     /// Afterbirth+, so a player who owns the Windows-only Repentance got the old game (highball#223);
     /// its row says `"available": false` and the Windows build leads, with the Mac one a click away.
-    public static func leads(entry: GameDBEntry?, installedOnMac: Bool) -> Bool {
-        installedOnMac && entry?.nativeMac?.available != false
+    /// Without a row, a Mac build Steam's data says is 32-bit never leads: it can't run.
+    public static func leads(entry: GameDBEntry?, installedOnMac: Bool, appInfo: MacAppInfoBuild? = nil) -> Bool {
+        guard installedOnMac else { return false }
+        if let available = entry?.nativeMac?.available { return available }
+        return appInfo != .only32Bit
+    }
+}
+
+/// What Steam's app data says about a game's Mac build, read the way Steam for Mac reads it.
+/// Steam marks a build that runs on current macOS with `macos64` or `macosapplesilicon` in
+/// `common.osextended` (Cyberpunk 2077 and Lies of P carry only the second), and a macOS launch
+/// entry can say `osarch` 64 on its own (LEGO Jurassic World, whose oslist names Windows only).
+/// A Mac build with neither is 32-bit, the case where Steam for Mac says it is "unable to run
+/// 32-bit games": Stacking, LEGO Marvel Super Heroes, Portal. Checked against Steam's data
+/// through api.steamcmd.net for 15 titles on 2026-10-11.
+public enum MacAppInfoBuild: Sendable, Hashable {
+    /// No Mac build in the data.
+    case absent
+    /// A Mac build exists and is 32-bit only.
+    case only32Bit
+    /// A Mac build that runs on current macOS.
+    case runnable
+
+    /// `macLaunchArchs`: the `osarch` of each macOS launch entry, "" for one that names none.
+    public init(oslist: String?, osextended: String?, macLaunchArchs: [String]) {
+        let marks = (osextended ?? "").lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        if marks.contains("macos64") || marks.contains("macosapplesilicon") || macLaunchArchs.contains("64") {
+            self = .runnable
+        } else if (oslist ?? "").lowercased().contains("macos") || !macLaunchArchs.isEmpty {
+            self = .only32Bit
+        } else {
+            self = .absent
+        }
     }
 }
 

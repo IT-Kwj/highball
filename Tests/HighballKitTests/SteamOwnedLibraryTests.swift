@@ -7,13 +7,18 @@ final class SteamOwnedLibraryTests: XCTestCase {
 
     // MARK: A synthetic appinfo.vdf
 
-    private struct App { var appid: UInt32; var name: String; var type: String; var oslist: String = "windows" }
+    private struct App {
+        var appid: UInt32; var name: String; var type: String; var oslist: String = "windows"
+        var osextended: String? = nil
+        /// Launch entries under config.launch, each with its oslist and optional osarch.
+        var launch: [(oslist: String, osarch: String?)] = []
+    }
 
     private func le<T: FixedWidthInteger>(_ v: T) -> [UInt8] { withUnsafeBytes(of: v.littleEndian) { Array($0) } }
 
     /// Builds a v29 file (keys as indexes into a trailing string table) or a v28 one (inline keys).
     private func appinfo(_ apps: [App], v29: Bool = true) -> Data {
-        let keys = ["appinfo", "Common", "name", "type", "oslist", "appid"]
+        let keys = ["appinfo", "Common", "name", "type", "oslist", "appid", "osextended", "config", "launch", "osarch", "0", "1", "2"]
         func key(_ k: String) -> [UInt8] { v29 ? le(UInt32(keys.firstIndex(of: k)!)) : Array(k.utf8) + [0] }
         func str(_ k: String, _ v: String) -> [UInt8] { [0x01] + key(k) + Array(v.utf8) + [0] }
         func int(_ k: String, _ v: UInt32) -> [UInt8] { [0x02] + key(k) + le(v) }
@@ -22,8 +27,16 @@ final class SteamOwnedLibraryTests: XCTestCase {
         var entries: [UInt8] = []
         for app in apps {
             // Key case varies in Valve's data; the reader must not care.
-            let kv = obj("appinfo", int("appid", app.appid)
-                + obj("Common", str("name", app.name) + str("type", app.type) + str("oslist", app.oslist))) + [0x08]
+            var common = str("name", app.name) + str("type", app.type) + str("oslist", app.oslist)
+            if let ext = app.osextended { common += str("osextended", ext) }
+            var info = int("appid", app.appid) + obj("Common", common)
+            if !app.launch.isEmpty {
+                let entries = app.launch.enumerated().flatMap { i, l in
+                    obj(String(i), obj("config", str("oslist", l.oslist) + (l.osarch.map { str("osarch", $0) } ?? [])))
+                }
+                info += obj("config", obj("launch", entries))
+            }
+            let kv = obj("appinfo", info) + [0x08]
             let header = le(UInt32(2)) + le(UInt32(0)) + le(UInt64(0)) + [UInt8](repeating: 0, count: 20)
                 + le(UInt32(1)) + [UInt8](repeating: 0, count: 20)
             entries += le(app.appid) + le(UInt32(header.count + kv.count)) + header + kv
@@ -53,6 +66,36 @@ final class SteamOwnedLibraryTests: XCTestCase {
         XCTAssertEqual(parsed[1145360], SteamAppInfo.App(name: "Hades", type: "Game", oslist: "windows,macos"))
         XCTAssertEqual(parsed[570940]?.name, "DARK SOULS™: REMASTERED")
         XCTAssertEqual(parsed.count, 4)
+    }
+
+    /// Steam for Mac's own reading (highball#310, #316): osextended marks a Mac build that runs,
+    /// a 64-bit macOS launch entry does too, and a listed Mac build with neither is 32-bit.
+    /// Shaped on the real entries (api.steamcmd.net, 2026-10-11).
+    func testReadsTheMacBuildSteamForMacSees() throws {
+        let parsed = try SteamAppInfo.parse(appinfo([
+            App(appid: 234140, name: "Mad Max", type: "game", oslist: "windows,macos,linux", osextended: "macos64",
+                launch: [("windows", nil), ("macos", "64")]),
+            App(appid: 1091500, name: "Cyberpunk 2077", type: "game", oslist: "windows,macos", osextended: "macosapplesilicon"),
+            App(appid: 352400, name: "LEGO Jurassic World", type: "game", oslist: "windows", osextended: "",
+                launch: [("windows", nil), ("macos", "64")]),
+            App(appid: 115110, name: "Stacking", type: "game", oslist: "windows,macos,linux", launch: [("macos", nil)]),
+            App(appid: 570940, name: "DARK SOULS™: REMASTERED", type: "game"),
+        ]))
+        XCTAssertEqual(parsed[234140]?.osextended, "macos64")
+        XCTAssertEqual(parsed[234140]?.macLaunchArchs, ["64"])
+        XCTAssertEqual(parsed[115110]?.macLaunchArchs, [""], "a macOS launch entry naming no osarch")
+        XCTAssertEqual(parsed[234140]?.macBuild, .runnable)
+        XCTAssertEqual(parsed[1091500]?.macBuild, .runnable, "an Apple Silicon build carries no macos64 mark")
+        XCTAssertEqual(parsed[352400]?.macBuild, .runnable, "oslist says Windows, the launch entry says a 64-bit Mac build")
+        XCTAssertEqual(parsed[115110]?.macBuild, .only32Bit)
+        XCTAssertEqual(parsed[570940]?.macBuild, .absent)
+
+        let root = try steamRoot(owned: [115110, 352400, 570940], appinfo: appinfo([
+            App(appid: 352400, name: "LEGO Jurassic World", type: "game", launch: [("macos", "64")]),
+            App(appid: 115110, name: "Stacking", type: "game", oslist: "windows,macos,linux"),
+            App(appid: 570940, name: "DARK SOULS™: REMASTERED", type: "game"),
+        ]))
+        XCTAssertEqual(SteamOwnedLibrary.games(steamRoot: root).map(\.macBuild), [.absent, .runnable, .only32Bit])
     }
 
     func testReadsV28InlineKeys() throws {
