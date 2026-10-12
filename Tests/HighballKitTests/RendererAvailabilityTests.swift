@@ -46,6 +46,15 @@ final class RendererAvailabilityTests: XCTestCase {
         return b
     }
 
+    // MARK: A new environment's mode
+
+    func testANewEnvironmentStartsOnTheFirstModeItsEngineRuns() throws {
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(accepted: false)), .dxmt, "every Intel engine keeps DXMT")
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(ships: ["dxvk", "vkd3d"], accepted: false)), .dxvk,
+                       "no DXMT (the arm64 line): DXVK, not a DXMT setting that degrades at every launch")
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(ships: [], accepted: false)), .wined3d)
+    }
+
     // MARK: Direct3D 12-only programs (highball#139)
 
     func testADirect3D12OnlyProgramGetsAModeThatHasIt() throws {

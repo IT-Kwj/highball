@@ -68,9 +68,17 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
             // support all features (CSM)" (#21). d9vk is required for .dxvk: a missing overlay
             // must fail loudly, never silently regress D3D9 back to wined3d.
             guard let dxvk = engine.rendererDir("dxvk") else { throw HighballError.missing("dxvk renderer in engine \(engine.id)") }
-            guard let d9vk = engine.rendererDir("d9vk") else { throw HighballError.missing("d9vk (DXVK D3D9) renderer in engine \(engine.id)") }
-            env["WINEDLLPATH_PREPEND"] = [d9vk.appending(path: "wine").path, dxvk.appending(path: "wine").path].joined(separator: ":")
-            env["WINEDLLOVERRIDES+"] = "dxgi,d3d9,d3d10core,d3d11=n,b"
+            if let d9vk = engine.rendererDir("d9vk") {
+                env["WINEDLLPATH_PREPEND"] = [d9vk.appending(path: "wine").path, dxvk.appending(path: "wine").path].joined(separator: ":")
+                env["WINEDLLOVERRIDES+"] = "dxgi,d3d9,d3d10core,d3d11=n,b"
+            } else if engine.manifest.direct3D9 == "wined3d" {
+                // An engine that keeps Direct3D 9 on Wine's own and ships no d9vk at all (the
+                // arm64 line, whose DXVK is built without its d3d9): DXVK serves 10 and 11 only.
+                env["WINEDLLPATH_PREPEND"] = dxvk.appending(path: "wine").path
+                env["WINEDLLOVERRIDES+"] = "dxgi,d3d10core,d3d11=n,b"
+            } else {
+                throw HighballError.missing("d9vk (DXVK D3D9) renderer in engine \(engine.id)")
+            }
         }
         return env
     }
@@ -198,6 +206,13 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
     /// The best renderer `engine` can run in place of `wanted`. Never `wanted` itself.
     public static func fallback(for wanted: Renderer, in engine: InstalledEngine) -> Renderer {
         fallbackOrder.first { $0 != wanted && $0.availability(in: engine) == .available } ?? .wined3d
+    }
+
+    /// The mode a new environment starts on: the first in `fallbackOrder` this engine can run.
+    /// DXMT on every Intel engine, as before; DXVK on an engine without DXMT (the arm64 line),
+    /// rather than a DXMT setting that would degrade at every launch.
+    public static func defaultMode(for engine: InstalledEngine) -> Renderer {
+        fallbackOrder.first { $0.availability(in: engine) == .available } ?? .wined3d
     }
 
     public static func displayName(_ r: Renderer) -> String {

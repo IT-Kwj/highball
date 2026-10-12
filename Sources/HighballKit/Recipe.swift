@@ -435,6 +435,10 @@ public struct RecipeRunner: Sendable {
             let why = r.unavailableReason(in: engine)
             if let applied = Self.rendererToApply(recipeRenderer: r, settings: bottle.settings, available: why == nil) {
                 bottle.settings.renderer = applied
+            } else if r.availability(in: engine) == .notShipped {
+                // A recipe written for every engine (Steam's suggests DXMT) on an engine that has
+                // no such mode at all (the arm64 line): nothing to fix, so no advice to switch engines.
+                notes.append("Kept this bottle's renderer (\(bottle.settings.renderer.rawValue)); the recipe suggests \(r.rawValue), which engine \(engine.id) does not have.")
             } else if let why {
                 notes.append("Kept this bottle's renderer (\(bottle.settings.renderer.rawValue)); the recipe suggests \(r.rawValue): \(why)")
             } else {

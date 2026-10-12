@@ -59,7 +59,8 @@ public struct BottleStore: Sendable {
     }
 
     /// Creates the directory + bottle.json, then runs `wineboot -u` to populate the prefix.
-    public func create(name rawName: String, engine: InstalledEngine, renderer: Renderer = .dxmt, windowsVersion: WindowsVersion = .win10) async throws -> Bottle {
+    /// `renderer` nil starts the environment on the engine's default mode (Renderer.defaultMode).
+    public func create(name rawName: String, engine: InstalledEngine, renderer: Renderer? = nil, windowsVersion: WindowsVersion = .win10) async throws -> Bottle {
         let name = rawName.trimmingCharacters(in: .whitespaces)
         if let problem = Self.nameProblem(name) { throw HighballError.invalid(problem) }
         try paths.ensure()
@@ -71,7 +72,7 @@ public struct BottleStore: Sendable {
         guard lstat(url.path, &existing) != 0 else { throw HighballError.invalid("bottle '\(name)' already exists") }
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         var settings = BottleSettings(name: name, engineID: engine.id)
-        settings.renderer = renderer
+        settings.renderer = renderer ?? Renderer.defaultMode(for: engine)
         settings.windowsVersion = windowsVersion
         let bottle = Bottle(url: url, settings: settings)
         try bottle.save()
