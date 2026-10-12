@@ -875,7 +875,8 @@ public struct Bottle: Sendable {
             let inserted = (env["DYLD_INSERT_LIBRARIES"] ?? "").split(separator: ":").map(String.init)
             env["DYLD_INSERT_LIBRARIES"] = ([lib.path] + inserted.filter { $0 != lib.path }).joined(separator: ":")
         }
-        return env
+        // A recipe's value can depend on this Mac (a video memory budget from its memory).
+        return env.mapValues { MacVariables.expand($0) }
     }
 
     /// The renderer-specific bridge files that make the DLSS switch actionable in this engine.
@@ -1018,7 +1019,8 @@ public struct Bottle: Sendable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // DXVK only writes its per-process log if the directory exists.
         try FileManager.default.createDirectory(at: dxvkLogURL, withIntermediateDirectories: true)
-        let content = Self.dxvkConfig(async: settings.dxvkAsync, appConfig: settings.dxvkAppConfig)
+        let appConfig = settings.dxvkAppConfig.mapValues { $0.mapValues { MacVariables.expand($0) } }
+        let content = Self.dxvkConfig(async: settings.dxvkAsync, appConfig: appConfig)
         if (try? String(contentsOf: dxvkConfigURL, encoding: .utf8)) != content {
             try content.write(to: dxvkConfigURL, atomically: true, encoding: .utf8)
         }

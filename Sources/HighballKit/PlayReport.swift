@@ -10,6 +10,8 @@ public enum Machine {
         (try? Shell.capture("/usr/bin/sw_vers", ["-productVersion"]))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
     }
+    /// This Mac's memory in MB, which Apple silicon shares between the CPU and the GPU.
+    public static var memoryMB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_048_576) }
 }
 
 /// A compatibility report for highball-db, prefilled from a finished session so "how did it go"
