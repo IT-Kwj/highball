@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import HighballKit
 import Observation
+import os
 
 /// The three Settings tabs, so a deep link can select one.
 enum SettingsTab: Hashable { case environments, engine, troubleshooting }
@@ -2653,22 +2654,41 @@ final class AppState {
         }
     }
 
+    /// The Epic install running now, for the strip's Stop and for quitting the app (highball#323).
+    @ObservationIgnored private var epicInstallControl: LegendaryControl?
+
     func epicInstall(_ game: EpicStore.Game, in bottle: Bottle) {
+        let control = LegendaryControl()
         runBusy("Installing \(game.app_title)", expected: L("a large download; you can leave it running"),
-                stop: .cancelTask(label: L("Stop"))) { [self] in
+                stop: .cancelTask(label: L("Stop")), cleanup: { [weak self] in self?.epicInstallControl = nil }) { [self] in
+            epicInstallControl = control
             let store = epicStore
             epicDownloadTotal = nil
-            let status = try await Task.detached {
-                try store.install(game.app_name, into: bottle) { line in
-                    Task { @MainActor in self.appendLog(line); self.reportEpicDownload(line) }
-                }
-            }.value
+            let refused = OSAllocatedUnfairLock(initialState: false)
+            // Stop cancels this task, and the cancellation reaches legendary as a Ctrl-C, which
+            // keeps the download's progress for the next Install.
+            let status = try await withTaskCancellationHandler {
+                try await Task.detached {
+                    try store.install(game.app_name, into: bottle, control: control) { line in
+                        if EpicStore.refusedForLock(line) { refused.withLock { $0 = true } }
+                        Task { @MainActor in self.appendLog(line); self.reportEpicDownload(line) }
+                    }
+                }.value
+            } onCancel: { control.stop() }
+            try Task.checkCancellation()
+            if refused.withLock({ $0 }) {
+                throw HighballError.failed(L("Another Epic download is still running, and legendary installs one game at a time. If Highball shows none, one started before Highball last quit is still going, so quit legendary in Activity Monitor and press Install again."))
+            }
             guard status == 0 else {
                 throw HighballError.processFailed(command: "epic install", status: status, output: "see the log above")
             }
             await MainActor.run { self.epicRefresh() }
         }
     }
+
+    /// Quitting the app stops an Epic download the way Stop does, so it never runs on alone,
+    /// holding legendary's install lock with nothing on screen to stop it (highball#323).
+    func stopEpicInstall() { epicInstallControl?.stop() }
 
     // renderer nil = the bottle's own renderer (the old hardcoded .dxvk default ignored it).
     /// `throughEpicLauncherStandIn`: a Rockstar game bought on Epic (its recipe requires the

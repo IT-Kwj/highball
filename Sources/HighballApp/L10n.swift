@@ -523,6 +523,7 @@ enum L10n {
         "Stop and repair": "Arrêter et réparer",
         "Stopped.": "Arrêté.",
         "Stopped. Nothing already downloaded is lost.": "Arrêté. Rien de déjà téléchargé n'est perdu.",
+        "Another Epic download is still running, and legendary installs one game at a time. If Highball shows none, one started before Highball last quit is still going, so quit legendary in Activity Monitor and press Install again.": "Un autre téléchargement Epic est toujours en cours, et legendary installe un jeu à la fois. Si Highball n'en montre aucun, un téléchargement lancé avant la dernière fermeture de Highball continue, alors quittez legendary dans le Moniteur d'activité et appuyez de nouveau sur Installer.",
         "Stopped. Repairing the bottle so nothing half-installed stays behind.": "Arrêté. Réparation de l'environnement pour ne rien laisser à moitié installé.",
         "That usually means the graphics mode doesn't suit it on this Mac. Highball can switch this bottle to %@, or move it to engine %@.": "Cela veut généralement dire que le mode graphique ne lui convient pas sur ce Mac. Highball peut passer cet environnement en %@, ou le déplacer sur le moteur %@.",
         "That usually means the graphics mode doesn't suit it on this Mac. Highball can switch this bottle to %@.": "Cela veut généralement dire que le mode graphique ne lui convient pas sur ce Mac. Highball peut passer cet environnement en %@.",

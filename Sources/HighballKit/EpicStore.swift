@@ -61,8 +61,10 @@ public struct EpicStore: Sendable {
     }
 
     /// Runs legendary streaming each output line (installs are long and progress matters).
+    /// `control` lets the caller stop it the way Ctrl-C in a terminal does.
     @discardableResult
-    public func runStreaming(_ args: [String], onLine: (@Sendable (String) -> Void)? = nil) throws -> Int32 {
+    public func runStreaming(_ args: [String], control: LegendaryControl? = nil,
+                             onLine: (@Sendable (String) -> Void)? = nil) throws -> Int32 {
         let p = Process()
         p.executableURL = binary
         p.arguments = args
@@ -71,6 +73,7 @@ public struct EpicStore: Sendable {
         p.standardOutput = pipe
         p.standardError = pipe
         try p.run()
+        control?.started(p)
         let reader = pipe.fileHandleForReading
         var buffer = Data()
         while true {
@@ -188,10 +191,18 @@ public struct EpicStore: Sendable {
 
     /// Installs a game's Windows build into the bottle at drive_c/Games/<folder>.
     @discardableResult
-    public func install(_ appName: String, into bottle: Bottle, onLine: (@Sendable (String) -> Void)? = nil) throws -> Int32 {
+    public func install(_ appName: String, into bottle: Bottle, control: LegendaryControl? = nil,
+                        onLine: (@Sendable (String) -> Void)? = nil) throws -> Int32 {
         let base = bottle.driveC.appending(path: "Games", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return try runStreaming(Self.installArguments(appName: appName, basePath: base.path), onLine: onLine)
+        return try runStreaming(Self.installArguments(appName: appName, basePath: base.path), control: control, onLine: onLine)
+    }
+
+    /// legendary refuses to start an install while another legendary holds its install lock,
+    /// and returns as if it had succeeded, status 0, so the strip said Done over nothing
+    /// installed (highball#323, a download from before a restart still running).
+    public static func refusedForLock(_ line: String) -> Bool {
+        line.contains("Failed to acquire installed data lock")
     }
 
     /// legendary's install log names the download's size before it starts ("Download size:
@@ -252,5 +263,77 @@ public struct EpicStore: Sendable {
                           arguments: params,
                           workingDirectory: URL(fileURLWithPath: workdir),
                           environment: env)
+    }
+}
+
+/// Stops a running legendary the way Ctrl-C in a terminal does. A terminal signals the whole
+/// process group, and legendary's downloader runs in child processes, so SIGINT goes to
+/// legendary and everything it started. legendary answers by keeping the download's progress,
+/// and the same install picks up from there later ("Downloads are resumable, you can interrupt
+/// the download with CTRL-C and resume it using the same command later on", its install
+/// output). Whatever is still running after the grace period gets SIGTERM, and SIGKILL half a
+/// period later, including a child left behind by a parent that already exited. Each process
+/// is signalled only while it is the one seen at Stop, by its start time, so a pid taken over
+/// in the meantime is never hit. Before this the strip's Stop cancelled a task nothing was
+/// listening to, and the download outlived the app (highball#323).
+public final class LegendaryControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var stopRequested = false
+    /// Seconds between SIGINT and SIGTERM, and SIGKILL at one and a half times that.
+    private let grace: TimeInterval
+
+    public init(grace: TimeInterval = 10) { self.grace = grace }
+
+    func started(_ process: Process) {
+        let stopNow = lock.withLock { () -> Bool in self.process = process; return stopRequested }
+        if stopNow { stop() }
+    }
+
+    public func stop() {
+        let process = lock.withLock { () -> Process? in stopRequested = true; return self.process }
+        guard let process else { return }
+        let seen = Self.members(of: process)
+        Self.signal(seen, SIGINT)
+        DispatchQueue.global().asyncAfter(deadline: .now() + grace) { Self.signal(seen + Self.members(of: process), SIGTERM) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + grace * 1.5) { Self.signal(seen + Self.members(of: process), SIGKILL) }
+    }
+
+    struct Member: Hashable {
+        let pid: pid_t
+        let started: UInt64
+    }
+
+    /// legendary and every process under it, each with its start time, or none once legendary
+    /// itself has exited.
+    private static func members(of process: Process) -> [Member] {
+        guard process.isRunning else { return [] }
+        return tree(process.processIdentifier).compactMap { pid in startTime(pid).map { Member(pid: pid, started: $0) } }
+    }
+
+    private static func signal(_ members: [Member], _ signal: Int32) {
+        for member in Set(members) where startTime(member.pid) == member.started { kill(member.pid, signal) }
+    }
+
+    /// When the process started, in microseconds, or nil when there is no such process.
+    static func startTime(_ pid: pid_t) -> UInt64? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info.pbi_start_tvsec &* 1_000_000 &+ info.pbi_start_tvusec
+    }
+
+    /// A process and every process under it, parents first.
+    static func tree(_ root: pid_t) -> [pid_t] {
+        var pids = [root], next = 0
+        while next < pids.count {
+            let parent = pids[next]; next += 1
+            let count = proc_listchildpids(parent, nil, 0)
+            guard count > 0 else { continue }
+            var children = [pid_t](repeating: 0, count: Int(count) + 8)
+            let found = children.withUnsafeMutableBytes { proc_listchildpids(parent, $0.baseAddress, Int32($0.count)) }
+            for child in children.prefix(Int(max(found, 0))) where child > 0 && !pids.contains(child) { pids.append(child) }
+        }
+        return pids
     }
 }
