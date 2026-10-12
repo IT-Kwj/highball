@@ -25,6 +25,38 @@ final class EngineArchTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
+    // MARK: Environments stay on one architecture
+
+    /// No prefix has been moved between the Intel engines and the arm64 line, so the picker and
+    /// the failure advice never offer it; a recipe's engine ask offers a new environment instead.
+    func testEnvironmentsMoveOnlyWithinOneArchitecture() {
+        let intel = manifest("x86_64"), arm = manifest("arm64")
+        var intel2 = intel; intel2.id = "x64-test-r2"
+        let root = tempRoot("hb-arch-move")
+        let installed = [InstalledEngine(manifest: intel, root: root.appending(path: intel.id)),
+                         InstalledEngine(manifest: arm, root: root.appending(path: arm.id))]
+        XCTAssertEqual(EngineStore.offeredEngines(installed: installed, known: [intel2], current: intel.id, macOS: "27.0").map(\.id),
+                       ["x64-test-r1", "x64-test-r2"])
+        XCTAssertEqual(EngineStore.offeredEngines(installed: installed, known: [intel2], current: arm.id, macOS: "27.0").map(\.id),
+                       ["arm64-test-r1"])
+        XCTAssertEqual(Set(EngineStore.offeredEngines(installed: installed, known: [intel2], current: "gone-r1", macOS: "27.0").map(\.id)),
+                       ["x64-test-r1", "arm64-test-r1", "x64-test-r2", "gone-r1"], "an environment whose engine is gone keeps every choice")
+        XCTAssertNil(EngineStore.alternateEngine(for: arm.id, installed: installed, defaultID: intel.id), "an Intel default is no advice for an arm64 environment")
+        XCTAssertNil(EngineStore.alternateEngine(for: intel.id, installed: installed, defaultID: nil))
+        XCTAssertTrue(EngineStore.sameArch(current: nil, target: "arm64"))
+        XCTAssertFalse(EngineStore.sameArch(current: "x86_64", target: "arm64"))
+        XCTAssertFalse(EngineStore.sameArch(current: "arm64", target: "x86_64"))
+    }
+
+    func testTheDownloadSizeCountsEachArchiveOnce() {
+        var m = manifest("arm64")
+        let renderers = URL(string: "https://example.com/renderers-arm64.tar.xz")!
+        m.components["vkd3d"] = EngineManifest.Component(kind: "renderer", url: renderers, sha256: "a", size: 100)
+        m.components["dxvk"] = EngineManifest.Component(kind: "renderer", url: renderers, sha256: "a", size: 100)
+        m.components["wine"] = EngineManifest.Component(kind: "wine", url: URL(string: "https://example.com/wine.tar.xz")!, sha256: "b", size: 50)
+        XCTAssertEqual(m.downloadBytes, 150, "two folders of one archive are one download")
+    }
+
     func testDirectoriesFollowTheArchitecture() {
         let intel = manifest("x86_64"), arm = manifest("arm64")
         XCTAssertEqual(intel.pe64LibDir, "x86_64-windows")

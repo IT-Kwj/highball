@@ -131,6 +131,14 @@ public struct EngineManifest: Codable, Sendable, Identifiable {
         return "\(id)-\(digest.prefix(8))"
     }
 
+    /// What installing this engine downloads, each archive once: two components can unpack
+    /// different folders of one archive, and the store fetches it once (EngineStore.download).
+    public var downloadBytes: Int {
+        var seen = Set<URL>()
+        return components.values.sorted { $0.url.absoluteString < $1.url.absoluteString }
+            .reduce(0) { total, c in seen.insert(c.url).inserted ? total + (c.size ?? 0) : total }
+    }
+
     public static func load(from url: URL) throws -> EngineManifest {
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()

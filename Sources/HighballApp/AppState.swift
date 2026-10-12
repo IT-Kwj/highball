@@ -2872,6 +2872,14 @@ final class AppState {
     }
 
     /// What the bottle's Engine picker lists: installed engines, then known ones to download.
+    /// Whether `bottle` may move to `target` (EngineStore.sameArch). The bottle's engine is read
+    /// from the installed list, and from the bundled manifests only when its folder is gone.
+    func canMove(_ bottle: Bottle, to target: EngineManifest) -> Bool {
+        let id = bottle.settings.engineID
+        let arch = engines.first { $0.id == id }?.manifest.arch ?? Self.bundledManifests.first { $0.id == id }?.arch
+        return EngineStore.sameArch(current: arch, target: target.arch)
+    }
+
     func offeredEngines(for bottle: Bottle) -> [EngineStore.OfferedEngine] {
         EngineStore.offeredEngines(installed: engines, known: Self.knownManifests, current: bottle.settings.engineID)
     }
@@ -2880,6 +2888,11 @@ final class AppState {
     /// bundled manifest. Licenses accepted on any installed engine carry over.
     func moveBottle(_ bottle: Bottle, toEngineID id: String, done: DoneState? = nil) {
         guard !busy else { return }
+        if let target = engines.first(where: { $0.id == id })?.manifest ?? Self.knownManifests.first(where: { $0.id == id }),
+           !canMove(bottle, to: target) {
+            appendLog("\(bottle.name) stays on \(bottle.settings.engineID): \(id) is built for another architecture, and an environment does not move between the two")
+            return
+        }
         if let installed = engines.first(where: { $0.id == id }) { moveBottle(bottle, to: installed, done: done); return }
         guard let manifest = Self.knownManifests.first(where: { $0.id == id }) else { return }
         let accepted = Set(engines.flatMap { $0.manifest.acceptedLicenses ?? [] })

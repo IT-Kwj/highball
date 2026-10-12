@@ -151,10 +151,19 @@ public struct EngineStore: Sendable {
     /// bottle is not on it (the newer one, usually), else the newest other installed engine.
     /// nil with a single engine installed.
     public static func alternateEngine(for currentID: String, installed: [InstalledEngine], defaultID: String?) -> InstalledEngine? {
-        if let d = installed.first(where: { $0.id == defaultID }), d.id != currentID { return d }
-        return installed.filter { $0.id != currentID }
+        let arch = installed.first { $0.id == currentID }?.manifest.arch
+        let movable = installed.filter { sameArch(current: arch, target: $0.manifest.arch) }
+        if let d = movable.first(where: { $0.id == defaultID }), d.id != currentID { return d }
+        return movable.filter { $0.id != currentID }
             .max { $0.id.compare($1.id, options: .numeric) == .orderedAscending }
     }
+
+    /// Whether an environment on an engine of the `current` architecture may move to an engine of
+    /// the `target` one. No prefix has been moved between the Intel engines and the native arm64
+    /// line, in either direction, so the picker, the failure advice and a recipe's engine ask
+    /// offer a new environment instead. An unknown current architecture (the engine's folder is
+    /// gone) keeps every engine offered, as before.
+    public static func sameArch(current: String?, target: String) -> Bool { current == nil || current == target }
 
     /// One row per engine the app can put a bottle on: every installed engine, then every
     /// bundled manifest that is not installed yet (it downloads when chosen). Newest first
@@ -170,11 +179,14 @@ public struct EngineStore: Sendable {
     public static func offeredEngines(installed: [InstalledEngine], known: [EngineManifest], current: String? = nil,
                                       macOS: String = EngineManifest.currentMacOS) -> [OfferedEngine] {
         let newestFirst: (String, String) -> Bool = { $0.compare($1, options: .numeric) == .orderedDescending }
-        let have = installed.sorted { newestFirst($0.id, $1.id) }.map { OfferedEngine(id: $0.id, installed: true) }
-        let ids = Set(have.map(\.id))
+        let ids = Set(installed.map(\.id))
+        let arch = installed.first { $0.id == current }?.manifest.arch ?? known.first { $0.id == current }?.arch
+        let have = installed.filter { sameArch(current: arch, target: $0.manifest.arch) }
+            .sorted { newestFirst($0.id, $1.id) }.map { OfferedEngine(id: $0.id, installed: true) }
         // A manifest with a macOS floor above this Mac is not offered: it would download and
         // then run untested (r6's D3DMetal was measured on 27 only). Installed engines stay listed.
-        let more = known.filter { !ids.contains($0.id) && $0.runs(onMacOS: macOS) }.sorted { newestFirst($0.id, $1.id) }
+        let more = known.filter { !ids.contains($0.id) && $0.runs(onMacOS: macOS) && sameArch(current: arch, target: $0.arch) }
+            .sorted { newestFirst($0.id, $1.id) }
             .map { OfferedEngine(id: $0.id, installed: false) }
         var rows = have + more
         if let current, !rows.contains(where: { $0.id == current }) { rows.append(OfferedEngine(id: current, installed: false, missing: true)) }
