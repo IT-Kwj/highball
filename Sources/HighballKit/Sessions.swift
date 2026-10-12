@@ -13,9 +13,21 @@ public struct GameSession: Identifiable, Sendable, Equatable {
     public let started: Date
     /// The renderer the launch used, for the post-play report.
     public let renderer: String?
-    public init(id: UUID = UUID(), title: String, bottleName: String, appid: Int?, markers: [String], started: Date = Date(), renderer: String? = nil) {
+    /// The row's start notice (GameDBEntry.startNotice) and how long it stays.
+    public let startNotice: String?
+    public let startNoticeMinutes: Int
+    public init(id: UUID = UUID(), title: String, bottleName: String, appid: Int?, markers: [String], started: Date = Date(), renderer: String? = nil,
+                startNotice: String? = nil, startNoticeMinutes: Int? = nil) {
         self.id = id; self.title = title; self.bottleName = bottleName; self.appid = appid; self.markers = markers; self.started = started
         self.renderer = renderer
+        self.startNotice = startNotice.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        self.startNoticeMinutes = startNoticeMinutes ?? 15
+    }
+
+    /// The start notice to show at `now`, nil without one or once its time is over.
+    public func notice(at now: Date) -> String? {
+        guard let startNotice, now.timeIntervalSince(started) < Double(startNoticeMinutes) * 60 else { return nil }
+        return startNotice
     }
 }
 

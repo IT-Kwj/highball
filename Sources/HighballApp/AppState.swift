@@ -2445,7 +2445,8 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.name, bottleName: bottle.name, appid: game.appid, markers: markers,
-                                     renderer: servedRenderer.rawValue), processList: box.processList)
+                                     renderer: servedRenderer.rawValue, startNotice: entry?.startNotice,
+                                     startNoticeMinutes: entry?.startNoticeMinutes), processList: box.processList)
         }
     }
 
@@ -2684,7 +2685,8 @@ final class AppState {
                 }
             }
             // The variables this game's recipe scoped to it (highball#198), on top of Legendary's.
-            let gameEnvironment = bottle.settings.environment(forGame: gameDB.byEpicAppName[game.app_name]?.id)
+            let row = gameDB.byEpicAppName[game.app_name]
+            let gameEnvironment = bottle.settings.environment(forGame: row?.id)
             watchedLaunch(box) {
                 try await runner.start(executable, arguments: arguments,
                                        renderer: renderer, extraEnvironment: info.environment.merging(gameEnvironment) { _, new in new },
@@ -2704,7 +2706,8 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.app_title, bottleName: bottle.name, appid: nil, markers: markers,
-                                     renderer: (renderer ?? bottle.settings.renderer).rawValue), processList: box.processList)
+                                     renderer: (renderer ?? bottle.settings.renderer).rawValue, startNotice: row?.startNotice,
+                                     startNoticeMinutes: row?.startNoticeMinutes), processList: box.processList)
         }
     }
 

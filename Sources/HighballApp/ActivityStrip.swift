@@ -159,16 +159,22 @@ struct ActivityStrip: View {
     }
 
     private func sessionRow(_ session: GameSession) -> some View {
-        HStack(spacing: 10) {
-            Circle().fill(HB.good).frame(width: 8, height: 8).padding(.horizontal, 4)
-            Text(String(format: L("%@ is running"), session.title)).font(.callout.weight(.medium)).lineLimit(1)
-            Spacer(minLength: 12)
-            TimelineView(.periodic(from: .now, by: 15)) { ctx in
+        TimelineView(.periodic(from: .now, by: 15)) { ctx in
+            HStack(spacing: 10) {
+                Circle().fill(HB.good).frame(width: 8, height: 8).padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(String(format: L("%@ is running"), session.title)).font(.callout.weight(.medium)).lineLimit(1)
+                    // The game's own loading after its process appeared, which nothing else explains.
+                    if let notice = session.notice(at: ctx.date) {
+                        Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 12)
                 Text(ActivityText.minutes(since: session.started, now: ctx.date).map { String(format: L("%d min"), $0) } ?? L("just started"))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Button(L("Stop")) { state.stopSession(session) }.controlSize(.small)
             }
-            Button(L("Stop")) { state.stopSession(session) }.controlSize(.small)
+            .padding(.horizontal, 14).padding(.vertical, 8)
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
     }
 }
