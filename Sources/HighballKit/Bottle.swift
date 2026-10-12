@@ -36,6 +36,10 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
             env["DXVK_RELAX_FEATURES"] = "1"
             env["VKD3D_FEATURE_LEVEL"] = "12_0"
             env["VKD3D_SHADER_MODEL"] = "6_6"
+            // The pipeline cache goes in the prefix, one folder per engine build (B2): without a
+            // path vkd3d-proton writes it beside the game's executable, where it outlives the
+            // MoltenVK and renderer builds that compiled it.
+            env["VKD3D_SHADER_CACHE_PATH"] = Bottle.vkd3dCacheWindowsRoot + "\\" + engine.manifest.vkd3dCacheKey
         case .dxmt:
             guard let dir = engine.rendererDir("dxmt") else { throw HighballError.missing(unavailableReason(in: engine) ?? "dxmt renderer in engine \(engine.id)") }
             env["WINEDLLPATH_PREPEND"] = Self.withD9VK(dir.appending(path: "wine").path, engine: engine)
@@ -909,6 +913,25 @@ public struct Bottle: Sendable {
     public static let dxvkConfigWindowsPath = #"C:\highball\dxvk.conf"#
     /// Unix location of the same file.
     public var dxvkConfigURL: URL { driveC.appending(path: "highball/dxvk.conf") }
+
+    /// Where the vkd3d mode keeps vkd3d-proton's pipeline caches, as Windows sees it and on disk.
+    public static let vkd3dCacheWindowsRoot = "C:\\highball\\cache\\vkd3d"
+    public var vkd3dCacheRoot: URL { driveC.appending(path: "highball/cache/vkd3d", directoryHint: .isDirectory) }
+
+    /// Makes the cache folder a launch's environment names, when it is one of Highball's, and
+    /// removes the folders other engine builds left beside it. A path a recipe set elsewhere is
+    /// left alone.
+    public func prepareVkd3dCache(environment env: [String: String]) {
+        let prefix = Self.vkd3dCacheWindowsRoot + "\\"
+        guard let path = env["VKD3D_SHADER_CACHE_PATH"], path.hasPrefix(prefix) else { return }
+        let key = String(path.dropFirst(prefix.count))
+        guard !key.isEmpty, !key.contains("\\"), !key.contains("/") else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: vkd3dCacheRoot.appending(path: key), withIntermediateDirectories: true)
+        for old in (try? fm.contentsOfDirectory(atPath: vkd3dCacheRoot.path)) ?? [] where old != key {
+            try? fm.removeItem(at: vkd3dCacheRoot.appending(path: old))
+        }
+    }
     /// Windows path DXVK writes its per-process logs to, and its Unix location.
     public static let dxvkLogWindowsPath = #"C:\highball\logs"#
     public var dxvkLogURL: URL { driveC.appending(path: "highball/logs") }

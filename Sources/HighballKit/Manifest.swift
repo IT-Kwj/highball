@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// An engine manifest describes every binary Gin downloads to assemble one engine.
@@ -119,6 +120,16 @@ public struct EngineManifest: Codable, Sendable, Identifiable {
 
     /// Renderer overlay names gated behind a license id.
     public static let gatedRenderers: [String: String] = ["d3dmetal": "apple-gptk-license-2023-08-17"]
+
+    /// The folder name of vkd3d-proton's pipeline cache for this engine build: the id plus eight hex
+    /// digits over every component's checksum. A rebuilt component (a patched MoltenVK under the same
+    /// version, a new renderer build) gets a fresh cache instead of reusing pipelines another build
+    /// compiled, which is how stale caches survived MoltenVK rebuilds (backlog B2).
+    public var vkd3dCacheKey: String {
+        let fingerprint = components.keys.sorted().map { "\($0)=\(components[$0]!.sha256)" }.joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(fingerprint.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "\(id)-\(digest.prefix(8))"
+    }
 
     public static func load(from url: URL) throws -> EngineManifest {
         let data = try Data(contentsOf: url)
