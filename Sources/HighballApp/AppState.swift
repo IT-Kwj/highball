@@ -562,6 +562,17 @@ final class AppState {
         steamOwnedRefresh()
     }
 
+    @ObservationIgnored private var steamInstallSignatures: [String: String] = [:]
+
+    /// The client watch's backstop for the install watcher: a running Steam's install records
+    /// changed, so the installed games are read again whether or not the watcher heard it
+    /// (highball#286, a finished install whose page kept offering Install).
+    func steamInstallsMayHaveChanged(_ bottle: String, signature: String) {
+        guard steamInstallSignatures[bottle] != signature else { return }
+        steamInstallSignatures[bottle] = signature
+        refreshSteamInstalls()
+    }
+
     /// Hands an owned Steam game to its bottle's Steam, whose own dialog asks where to put it:
     /// a running client takes the steam:// URL; otherwise Steam starts as its pin does (with
     /// the sync its window needs) and receives it as an argument. Nothing is automated.
@@ -835,25 +846,34 @@ final class AppState {
     /// finishing in an open Steam window), so the library follows without a relaunch.
     @ObservationIgnored private var installWatcher: DirectoryWatcher?
 
-    /// The directories whose entries change when a game is installed or removed: Steam's
-    /// steamapps (appmanifest files) and the folder Epic installs land in.
+    /// The directories whose entries change when a game is installed or removed: the steamapps
+    /// of each Steam library folder (appmanifest files) and the folder Epic installs land in.
     private func installDirectories(of bottle: Bottle) -> [URL] {
-        var dirs = [bottle.driveC.appending(path: "Games")]
-        if let root = SteamLibrary.steamRoot(of: bottle) { dirs.append(root.appending(path: "steamapps")) }
-        return dirs
+        [bottle.driveC.appending(path: "Games")] + SteamLibrary.steamappsDirectories(of: bottle)
     }
 
     /// The cheap part of `refresh`: installed games only. Runs on every install-record change,
     /// so it must not spawn per call beyond legendary's install list, and never touches the
     /// directories it watches.
     func refreshInstalledGames() {
-        // Re-arm first: a steamapps that did not exist at the last full refresh (Steam was
-        // installed after launch) is only watched from here on, and a replaced one is reopened.
-        installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
+        refreshSteamInstalls()
         let mac = MacSteam.installedGames()
         if mac != macSteamGames { macSteamGames = mac; rebuildLibrary() }
+        refreshEpicInstalls()
+    }
+
+    /// The Windows Steam part of `refreshInstalledGames`, without legendary, so the client watch
+    /// can run it every few seconds of a long download for the price of a few directory reads.
+    func refreshSteamInstalls() {
+        // Re-arm first: a steamapps that did not exist at the last full refresh (Steam was
+        // installed after launch, or a library folder was added) is only watched from here on,
+        // and a replaced one is reopened.
+        installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         let games = Dictionary(bottles.map { ($0.name, SteamLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
         if games != gamesByBottle { gamesByBottle = games; rebuildLibrary() }
+    }
+
+    private func refreshEpicInstalls() {
         guard epicSignedIn, !epicFetchInFlight else { return }
         epicFetchInFlight = true
         Task.detached { [store = epicStore] in
@@ -1951,6 +1971,9 @@ final class AppState {
                     // The owned library fills in as the client loads it after sign-in (highball#199).
                     let signature = SteamOwnedLibrary.signature(steamRoot: root)
                     await MainActor.run { [self] in self.steamLibraryMayHaveChanged(bottle.name, signature: signature) }
+                    // An install starting or finishing where the directory watcher can't hear it (highball#286).
+                    let installs = SteamLibrary.installSignature(of: bottle)
+                    await MainActor.run { [self] in self.steamInstallsMayHaveChanged(bottle.name, signature: installs) }
                     // Steam can park a launch on a dialog nobody sees (issue #74).
                     if let waiting = SteamGameAction.pending(steamRoot: root) {
                         await MainActor.run { [self] in self.steamIsWaitingForAnAnswer(waiting, in: bottle) }

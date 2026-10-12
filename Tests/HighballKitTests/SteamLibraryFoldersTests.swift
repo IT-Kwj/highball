@@ -90,4 +90,36 @@ final class SteamLibraryFoldersTests: XCTestCase {
         XCTAssertNil(SteamLibrary.unixURL(windowsPath: "not a windows path", bottleURL: bottle))
         XCTAssertEqual(SteamLibrary.libraryPaths(in: #""path"        "D:\\SteamLibrary""#), ["D:\\SteamLibrary"])
     }
+
+    func testTheInstallSignatureFollowsRecordsInEveryLibraryFolder() throws {
+        // highball#286: an install finished in Steam and its page kept offering Install. The
+        // watcher covered only the environment's own steamapps, and the client watch now compares
+        // this signature, so a record written in any library folder counts.
+        let bottle = tmp.appending(path: "bottle", directoryHint: .isDirectory)
+        let external = tmp.appending(path: "Disk/SteamLibrary", directoryHint: .isDirectory)
+        let steam = bottle.appending(path: "drive_c/Program Files (x86)/Steam", directoryHint: .isDirectory)
+        try write("", to: steam.appending(path: "steam.exe"))
+        try write(manifest(400, "Portal", dir: "Portal"), to: steam.appending(path: "steamapps/appmanifest_400.acf"))
+        try FileManager.default.createDirectory(at: external.appending(path: "steamapps"), withIntermediateDirectories: true)
+        let dosdevices = bottle.appending(path: "dosdevices", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dosdevices, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: dosdevices.appending(path: "d:").path, withDestinationPath: tmp.appending(path: "Disk").path)
+        try write("\"libraryfolders\"\n{\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\"\n\t}\n}\n",
+                  to: steam.appending(path: "steamapps/libraryfolders.vdf"))
+
+        XCTAssertEqual(SteamLibrary.steamappsDirectories(steamRoot: steam, bottleURL: bottle).map(\.path),
+                       [steam.appending(path: "steamapps").resolvingSymlinksInPath().path,
+                        external.appending(path: "steamapps").resolvingSymlinksInPath().path],
+                       "the watcher gets the environment's own steamapps and the second library's")
+        let before = SteamLibrary.installSignature(steamRoot: steam, bottleURL: bottle)
+        XCTAssertEqual(SteamLibrary.installSignature(steamRoot: steam, bottleURL: bottle), before, "nothing written, nothing changed")
+        let record = external.appending(path: "steamapps/appmanifest_221380.acf")
+        try write(manifest(221380, "Age of Empires II (2013)", dir: "Age2HD"), to: record)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: record.path)
+        let started = SteamLibrary.installSignature(steamRoot: steam, bottleURL: bottle)
+        XCTAssertNotEqual(started, before, "a record appearing in the second library folder changes the signature")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2_000)], ofItemAtPath: record.path)
+        XCTAssertNotEqual(SteamLibrary.installSignature(steamRoot: steam, bottleURL: bottle), started,
+                          "a rewritten record, the install finishing, changes it again")
+    }
 }
