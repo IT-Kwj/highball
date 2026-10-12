@@ -388,6 +388,12 @@ final class AppState {
     func fixRecipe(for item: LibraryItem) -> HighballKit.Recipe? {
         guard let entry = gameDB.entry(for: item),
               let recipe = Self.recipe(entry.id), recipe.kind == .game else { return nil }
+        // A recipe pinned to an engine this install does not see (a line still in preview) is not
+        // offered: the game page and Play stay as they were before the recipe existed.
+        let defaults = UserDefaults.standard
+        if EngineChannels.hidesPin(recipe.engine, bundled: Self.bundledManifests,
+                                   beta: defaults.bool(forKey: UpdateChannels.betaDefaultsKey),
+                                   preview: defaults.bool(forKey: EngineChannels.previewDefaultsKey)) { return nil }
         return recipe
     }
 
@@ -2769,10 +2775,20 @@ final class AppState {
             ?? repoRoot?.appending(path: "spike/engine-manifest.json")
     }
 
-    /// Every engine manifest the app ships: the default one plus `engines/*.json` (previous
-    /// engines kept for rollback, candidates offered in Advanced). A bottle can move to any of
+    /// Every engine manifest this install may see: the bundled ones minus those whose channel it
+    /// does not get (EngineChannels; a preview line ships hidden). A bottle can move to any of
     /// them; one that is not installed downloads first.
     static var knownManifests: [EngineManifest] {
+        let defaults = UserDefaults.standard
+        let beta = defaults.bool(forKey: UpdateChannels.betaDefaultsKey)
+        let preview = defaults.bool(forKey: EngineChannels.previewDefaultsKey)
+        return bundledManifests.filter { EngineChannels.visible(channel: $0.channel, beta: beta, preview: preview) }
+    }
+
+    /// Every engine manifest the app ships, visible or not: the default one plus
+    /// `engines/*.json` (previous engines kept for rollback, candidates offered in Advanced,
+    /// lines still in preview).
+    static var bundledManifests: [EngineManifest] {
         var urls: [URL] = []
         if let m = bundledManifest { urls.append(m) }
         if let dir = Bundle.main.resourceURL?.appending(path: "engines"),

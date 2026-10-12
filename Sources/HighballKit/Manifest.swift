@@ -63,6 +63,10 @@ public struct EngineManifest: Codable, Sendable, Identifiable {
     }
     public var requires: [String]?
     public var notes: [String]?
+    /// Who may see this engine (EngineChannels): nil for everyone, "beta" for installs that get
+    /// beta builds, "preview" only where the preview key is set. An engine line still being proven
+    /// ships in the app this way, and opening it to players is a change to this field.
+    public var channel: String?
 
     // MARK: Architecture
 
