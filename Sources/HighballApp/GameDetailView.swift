@@ -99,7 +99,11 @@ struct GameDetailView: View {
                 .font(.system(size: 30, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-            if let macBuild { macBlock(macBuild) }
+            if let macBuild {
+                macBlock(macBuild)
+            } else if let outdated = GamePageCopy.outdatedMacBuild(appInfo: item.steamAppID.flatMap { state.macAppInfoByAppID[$0] }, entry: entry) {
+                Label(L(outdated), systemImage: "apple.logo").font(.callout).foregroundStyle(.secondary)
+            }
             verdictBlock
             HStack(alignment: .top, spacing: 10) {
                 playRow.frame(maxWidth: .infinity, alignment: .leading)

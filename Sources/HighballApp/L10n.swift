@@ -522,6 +522,7 @@ enum L10n {
         "Steam is running in %@": "Steam est en cours dans %@",
         "Stop and repair": "Arrêter et réparer",
         "Stopped.": "Arrêté.",
+        "Steam also has a Mac version of this game, but it is 32-bit and macOS has not run those since Catalina, so Highball installs the Windows version.": "Steam propose aussi une version Mac de ce jeu, mais elle est en 32 bits et macOS ne les fait plus tourner depuis Catalina, alors Highball installe la version Windows.",
         "Stopped. Nothing already downloaded is lost.": "Arrêté. Rien de déjà téléchargé n'est perdu.",
         "Another Epic download is still running, and legendary installs one game at a time. If Highball shows none, one started before Highball last quit is still going, so quit legendary in Activity Monitor and press Install again.": "Un autre téléchargement Epic est toujours en cours, et legendary installe un jeu à la fois. Si Highball n'en montre aucun, un téléchargement lancé avant la dernière fermeture de Highball continue, alors quittez legendary dans le Moniteur d'activité et appuyez de nouveau sur Installer.",
         "Stopped. Repairing the bottle so nothing half-installed stays behind.": "Arrêté. Réparation de l'environnement pour ne rien laisser à moitié installé.",

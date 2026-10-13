@@ -213,4 +213,14 @@ final class MacSteamBuildTests: XCTestCase {
         XCTAssertEqual(installed.requirements, "Native Apple Silicon build, macOS 12 and M1 or later.")
         XCTAssertEqual(installed.source, "Steam for Mac lists it as installed.")
     }
+
+    func testA32BitMacVersionIsExplainedOnce() throws {
+        // highball#316: the Mac button vanished for 32-bit Mac builds with no word about why.
+        XCTAssertNotNil(GamePageCopy.outdatedMacBuild(appInfo: .only32Bit, entry: nil))
+        XCTAssertNil(GamePageCopy.outdatedMacBuild(appInfo: .runnable, entry: nil))
+        XCTAssertNil(GamePageCopy.outdatedMacBuild(appInfo: .absent, entry: nil))
+        XCTAssertNil(GamePageCopy.outdatedMacBuild(appInfo: nil, entry: nil))
+        let curated = try entry(#"{"id":"x","title":"X","steam_appid":1,"status":"community","nativeMac":{"available":true,"where":"Steam"}}"#)
+        XCTAssertNil(GamePageCopy.outdatedMacBuild(appInfo: .only32Bit, entry: curated), "a row about the Mac version decides")
+    }
 }
