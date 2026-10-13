@@ -286,11 +286,18 @@ public struct WineRunner: Sendable {
     /// a link the Mac does not see), while `executable` still names the log and the checks.
     @discardableResult
     public func start(_ executable: URL, arguments: [String] = [], renderer: Renderer? = nil, extraEnvironment: [String: String] = [:], workingDirectory: URL? = nil, headerNote: String? = nil, program: String? = nil, onOutput: (@Sendable (String) -> Void)? = nil) async throws -> LaunchResult {
+        // First, while no server holds the hive: the syncs below start the environment's server.
+        let linkedSteamView = (try? SteamRegistryView.repair(prefix: bottle.url)) == true
         await syncMacFontSubstitutes()
         await syncDllOverridesRegistry()
         await syncEngineAppDefaults()
         await syncKeyboardRegistry()
         var note = headerNote
+        if linkedSteamView {
+            let text = "linked HKCU\\Software\\Wow6432Node\\Valve to Software\\Valve so 32-bit lookups find Steam (Rockstar launcher error 113)"
+            onOutput?("note: \(text)")
+            note = [note, text].compactMap { $0 }.joined(separator: "; ")
+        }
         // External Mac drives get letters of their own, so Steam can offer them for a library.
         // Windows lists drives through Wine's mount manager, which reads the links when the
         // environment's server starts: a letter linked while the server ran stayed unlisted until
