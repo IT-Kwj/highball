@@ -49,6 +49,7 @@ public struct EngineStore: Sendable {
             guard let m = try? EngineManifest.load(from: manifest) else { return nil }
             try? linkRuntime(dir)   // heals broken runtime links from pre-0.7.9 installs
             try? linkSignedLoader(dir, manifest: m)   // an app that moved repoints its arm64 engines
+            Self.removeAppleDoubleFiles(in: InstalledEngine(manifest: m, root: dir).gstreamerPluginDir, recursive: false)
             return InstalledEngine(manifest: m, root: dir)
         }.sorted { $0.manifest.id < $1.manifest.id }
     }
@@ -252,6 +253,7 @@ public struct EngineStore: Sendable {
         try saved.save(to: staging.appending(path: "manifest.json"))
         try linkRuntime(staging)
         try linkSignedLoader(staging, manifest: saved)
+        Self.removeAppleDoubleFiles(in: staging, recursive: true)
         // The unpacked tree must be a whole engine before it replaces anything: an archive that
         // unpacked short (a full disk, a file the archive lacks) used to install all the same and
         // fail every launch afterwards (highball#118). The archive was checksummed, so the fault
@@ -535,6 +537,8 @@ public struct InstalledEngine: Sendable {
     }
     public var engineDir: URL { root.appending(path: "engine", directoryHint: .isDirectory) }
     public var frameworksDir: URL { root.appending(path: "frameworks", directoryHint: .isDirectory) }
+    /// Where GStreamer looks for its plugins (GST_PLUGIN_PATH in baseEnvironment).
+    var gstreamerPluginDir: URL { frameworksDir.appending(path: "GStreamer.framework/Versions/1.0/lib/gstreamer-1.0", directoryHint: .isDirectory) }
     /// The library that keeps Wine's audio pulls under half a period (highball#127) and, since
     /// 20261008, limits a mix over full scale (highball-db#349), when the engine ships it as a
     /// component. Bottle.environment inserts it into Wine's processes.
@@ -696,5 +700,50 @@ public struct InstalledEngine: Sendable {
                        .replacingOccurrences(of: "${renderers}", with: renderersDir.path)
         }
         return env
+    }
+}
+
+extension EngineStore {
+    /// macOS keeps a file's extended attributes in a `._name` file beside it on a volume with no
+    /// place for them (exFAT, FAT, SMB), so an engine unpacked onto such a drive gains one per
+    /// file. GStreamer takes every library in its plugin folder for a plugin and tried to load
+    /// the `._libgst*.dylib` files too (a player with Highball's home on a non-APFS drive, on
+    /// Discord, 2026-10-11). Removes each `._name` whose `name` sits beside it, nothing else, and
+    /// returns how many went. A fresh install is cleaned whole; an installed engine has its
+    /// plugin folder cleaned whenever engines are read, which also heals earlier installs.
+    @discardableResult
+    static func removeAppleDoubleFiles(in dir: URL, recursive: Bool) -> Int {
+        let fm = FileManager.default
+        var removed = 0
+        func clean(_ folder: URL) {
+            // readdir, not FileManager: Foundation's directory listing leaves `._` files out.
+            guard let names = rawNames(in: folder) else { return }
+            let present = Set(names)
+            for name in names where name.hasPrefix("._") && present.contains(String(name.dropFirst(2))) {
+                if (try? fm.removeItem(at: folder.appending(path: name))) != nil { removed += 1 }
+            }
+            guard recursive else { return }
+            for name in names where !name.hasPrefix("._") {
+                let child = folder.appending(path: name)
+                let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values?.isDirectory == true, values?.isSymbolicLink != true { clean(child) }
+            }
+        }
+        clean(dir)
+        return removed
+    }
+
+    /// Every entry of a directory as the file system lists it, `.` and `..` aside.
+    static func rawNames(in dir: URL) -> [String]? {
+        guard let handle = opendir(dir.path) else { return nil }
+        defer { closedir(handle) }
+        var names: [String] = []
+        while let entry = readdir(handle) {
+            let name = withUnsafePointer(to: entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names
     }
 }
