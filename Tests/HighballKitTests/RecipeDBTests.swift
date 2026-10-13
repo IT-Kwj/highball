@@ -6,10 +6,16 @@ import XCTest
 /// Skips cleanly when the sibling checkout isn't present (e.g. bare CI).
 final class RecipeDBTests: XCTestCase {
 
+    /// The database the app build bundles, chosen the way Scripts/make-app.sh chooses it: the
+    /// checkout beside the repo, else the build's own clone in .build/highball-db, which a release
+    /// worktree has and which a build resets to origin/main. With the sibling only, the release
+    /// gate skipped six of these seven tests (2026-10-12, the 0.10.15 gate).
     private var dbRoot: URL {
-        URL(fileURLWithPath: #filePath)
+        let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: "highball-db")
+        let sibling = repo.deletingLastPathComponent().appending(path: "highball-db")
+        if FileManager.default.fileExists(atPath: sibling.appending(path: "recipes").path) { return sibling }
+        return repo.appending(path: ".build/highball-db")
     }
 
     /// highball-db#195: Wine Mono writes the same NDP v4 Release value as Microsoft's .NET 4.8.1
@@ -18,7 +24,7 @@ final class RecipeDBTests: XCTestCase {
     /// The shipped recipe must look for the real runtime, clr.dll, which Mono never installs.
     func testDotNet48IsNotInstalledWhereOnlyWineMonoIs() throws {
         let f = dbRoot.appending(path: "recipes/tweaks/dotnet48.json")
-        guard FileManager.default.fileExists(atPath: f.path) else { throw XCTSkip("highball-db checkout not found next to the repo") }
+        guard FileManager.default.fileExists(atPath: f.path) else { throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone") }
         let recipe = try JSONDecoder.highball.decode(Recipe.self, from: Data(contentsOf: f))
         let dir = FileManager.default.temporaryDirectory.appending(path: "hb-dotnet-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -36,7 +42,7 @@ final class RecipeDBTests: XCTestCase {
     func testAllShippedRecipesDecode() throws {
         let recipes = dbRoot.appending(path: "recipes")
         guard FileManager.default.fileExists(atPath: recipes.path) else {
-            throw XCTSkip("highball-db checkout not found next to the repo")
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
         }
         var checked = 0
         for sub in ["launchers", "games", "tweaks"] {
@@ -62,7 +68,7 @@ final class RecipeDBTests: XCTestCase {
     func testAllShippedGameDBEntriesDecode() throws {
         let dir = dbRoot.appending(path: "db/games")
         guard FileManager.default.fileExists(atPath: dir.path) else {
-            throw XCTSkip("highball-db checkout not found next to the repo")
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
         }
         var checked = 0
         for f in try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
@@ -112,7 +118,7 @@ final class RecipeDBTests: XCTestCase {
     func testRockstarRecipeAsksForTheWine11EngineInsteadOfBlocking() throws {
         let f = dbRoot.appending(path: "recipes/launchers/rockstar.json")
         guard FileManager.default.fileExists(atPath: f.path) else {
-            throw XCTSkip("highball-db checkout not found next to the repo")
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
         }
         let r = try JSONDecoder.highball.decode(Recipe.self, from: Data(contentsOf: f))
         XCTAssertNil(r.blocked, "a blocked recipe refuses on every engine, including the one it works on")
@@ -125,7 +131,7 @@ final class RecipeDBTests: XCTestCase {
     func testVcrunInstallersArePinnedAndVerified() throws {
         let f = dbRoot.appending(path: "recipes/tweaks/vcrun2022.json")
         guard FileManager.default.fileExists(atPath: f.path) else {
-            throw XCTSkip("highball-db checkout not found next to the repo")
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
         }
         let r = try JSONDecoder.highball.decode(Recipe.self, from: Data(contentsOf: f))
         var installers = 0
@@ -146,7 +152,7 @@ final class RecipeDBTests: XCTestCase {
     func testGogRecipeUsesOfflineInstaller() throws {
         let f = dbRoot.appending(path: "recipes/launchers/gog-galaxy.json")
         guard FileManager.default.fileExists(atPath: f.path) else {
-            throw XCTSkip("highball-db checkout not found next to the repo")
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
         }
         let r = try JSONDecoder.highball.decode(Recipe.self, from: Data(contentsOf: f))
         let installers = r.steps.compactMap { step -> URL? in

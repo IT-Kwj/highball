@@ -75,10 +75,20 @@ for row in "${GAMES[@]}"; do
   # Steam when both ran (2026-09-19).
   $HB bottle kill "$bottle" >/dev/null 2>&1; sleep 3
   ($HB run "$bottle" 'C:\Program Files (x86)\Steam\steam.exe' --renderer $renderer -- -silent > /dev/null 2>&1 &); sleep 35
+  # Steam's own log from here on tells a launch Steam held back from one that failed.
+  clog="$H/bottles/$bottle/drive_c/Program Files (x86)/Steam/logs/console_log.txt"
+  clines=$(wc -l < "$clog" 2>/dev/null | tr -d ' '); clines=${clines:-0}
   ($HB run "$bottle" 'C:\Program Files (x86)\Steam\steam.exe' -- -applaunch $appid $extra > "$OUT/$name.log" 2>&1 &)
   n=0; until "$WINLIST" 2>/dev/null | grep -iE "wine.*($winre)" | grep -q 'on=true' || [ $n -ge 60 ]; do sleep 3; n=$((n+1)); done
   id=$("$WINLIST" 2>/dev/null | grep -iE "wine.*($winre)" | grep on=true | head -1 | awk '{print $1}')
-  if [ -z "$id" ]; then echo "  FAIL: no window within $((n*3))s"; results+=("{\"appid\":$appid,\"name\":\"$name\",\"result\":\"no window\"}"); passed=false
+  # The account playing on another computer (the M4, say) makes Steam wait for an answer to
+  # end that session before it starts a paid game. Nothing ran then, and the smoke must never
+  # answer for the owner, so the row is skipped rather than failed (2026-10-12: The Sims, FNAF
+  # and PEAK read as "no window" while the account was in Microsoft Flight Simulator 2024).
+  if [ -z "$id" ] && tail -n +$((clines + 1)) "$clog" 2>/dev/null | grep -qE "AppID $appid.*waiting for user response to KickingOtherSession"; then
+    echo "  SKIPPED: Steam waits to end this account's session on another computer, nothing ran"
+    results+=("{\"appid\":$appid,\"name\":\"$name\",\"result\":\"account busy elsewhere\"}")
+  elif [ -z "$id" ]; then echo "  FAIL: no window within $((n*3))s"; results+=("{\"appid\":$appid,\"name\":\"$name\",\"result\":\"no window\"}"); passed=false
   else
     # Capture three frames ten seconds apart. Prefer the per-window grab, but some games use a
     # layer-hosted (Metal) window that screencapture -l cannot image (it returns nothing/black);
@@ -126,8 +136,8 @@ for row in "${GAMES[@]}"; do
 done
 for b in Gaming canary-r6 re-w11; do $HB bottle kill "$b" >/dev/null 2>&1; done
 # Nothing installed is not a pass: say so and exit 3 so Scripts/gate.sh records "skipped".
-if ! printf '%s\n' "${results[@]}" | grep -qv '"not installed"'; then
-  echo "GAME SMOKE SKIPPED: none of the table's games is installed in the Gaming bottle"
+if ! printf '%s\n' "${results[@]}" | grep -qvE '"(not installed|bottle absent|account busy elsewhere)"'; then
+  echo "GAME SMOKE SKIPPED: nothing in the table ran (not installed, or the account busy on another computer)"
   python3 -c "import json,time;json.dump({'passed':False,'skipped':True,'epoch':int(time.time()),'date':time.strftime('%Y-%m-%d'),'results':[]},open('$OUT/latest.json','w'),indent=2)"
   exit 3
 fi
