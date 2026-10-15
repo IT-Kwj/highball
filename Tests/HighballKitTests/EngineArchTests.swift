@@ -71,20 +71,42 @@ final class EngineArchTests: XCTestCase {
                        ["x86_64-windows", "i386-windows"], "the default stays the Intel layout every shipped engine has")
     }
 
+    /// An arm64 engine's Wine opens MoltenVK and its other host libraries by leaf name, and the
+    /// GStreamer framework carries a stock libMoltenVK: the engine's lib leads the fallback path so
+    /// winevulkan gets the patched copy (the first app launch got the framework's, 2026-10-15).
+    func testAnArm64EngineOpensItsOwnHostLibrariesFirst() {
+        let root = URL(fileURLWithPath: "/e")
+        let arm = InstalledEngine(manifest: manifest("arm64"), root: root).baseEnvironment()["DYLD_FALLBACK_LIBRARY_PATH"]!
+        XCTAssertTrue(arm.hasPrefix("/e/engine/lib:"), arm)
+        XCTAssertTrue(arm.contains("/e/frameworks/GStreamer.framework/Versions/1.0/lib"), "the framework's plugins still find their libraries")
+        let intel = InstalledEngine(manifest: manifest("x86_64"), root: root).baseEnvironment()["DYLD_FALLBACK_LIBRARY_PATH"]!
+        XCTAssertTrue(intel.hasPrefix("/e/frameworks:"), "the Intel line is unchanged, its engine/lib links resolve through rpath")
+    }
+
     func testOnlyEnginesThatSaySoNeedRosetta() throws {
         XCTAssertTrue(manifest("x86_64", requires: ["rosetta2"]).requiresRosetta)
         XCTAssertFalse(manifest("arm64", requires: []).requiresRosetta)
         XCTAssertFalse(manifest("arm64").requiresRosetta, "no requires at all means nothing is required")
-        // Every engine shipped today is Intel code and must keep saying so, or the app would stop
-        // installing Rosetta for it.
+        // Every Intel engine shipped must keep saying so, or the app would stop installing Rosetta
+        // for it; the native arm64 line (arm64-wine11.18-r1 since 2026-10-15) runs x86-64 code
+        // through FEX inside Wine and must not ask for Rosetta.
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appending(path: "spike")
         var files = try FileManager.default.contentsOfDirectory(at: dir.appending(path: "engines"), includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }
         files.append(dir.appending(path: "engine-manifest.json"))
+        var intel = 0, arm = 0
         for f in files {
             let m = try EngineManifest.load(from: f)
-            XCTAssertEqual(m.arch, "x86_64", "\(m.id) is not an Intel engine")
-            XCTAssertTrue(m.requiresRosetta, "\(m.id) no longer declares rosetta2")
+            if m.isNativeARM64 {
+                arm += 1
+                XCTAssertFalse(m.requiresRosetta, "\(m.id) is native arm64 and must not ask for Rosetta")
+            } else {
+                intel += 1
+                XCTAssertEqual(m.arch, "x86_64", "\(m.id) is not an Intel engine")
+                XCTAssertTrue(m.requiresRosetta, "\(m.id) no longer declares rosetta2")
+            }
         }
+        XCTAssertGreaterThan(intel, 0, "the Intel engines are still shipped")
+        XCTAssertGreaterThan(arm, 0, "the arm64 line's manifest is shipped")
     }
 
     func testAnARM64EngineNeedsFEXAndTheSignedLoader() throws {

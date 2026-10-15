@@ -234,6 +234,22 @@ final class RendererAvailabilityTests: XCTestCase {
         XCTAssertFalse(Renderer.fallbackOrder.contains(.vkd3d), "never a fallback for other modes")
     }
 
+    /// A variable the bottle carries, from a recipe or the player, outranks the route's declared
+    /// defaults: Microsoft Flight Simulator 2024 asks for Shader Model 6.7 and its recipe says so,
+    /// and the first launch through the app had it replaced by the route's 6_6 (2026-10-15).
+    func testBottleVariablesOutrankTheRouteDefaults() throws {
+        let e = try engine(ships: ["dxmt", "dxvk", "d9vk", "vkd3d"], accepted: false)
+        var b = bottle(renderer: .vkd3d, explicit: true)
+        b.settings.environment["VKD3D_SHADER_MODEL"] = "6_7"
+        b.settings.environment["VKD3D_FEATURE_LEVEL"] = "12_1"
+        let env = try b.environment(engine: e)
+        XCTAssertEqual(env["VKD3D_SHADER_MODEL"], "6_7")
+        XCTAssertEqual(env["VKD3D_FEATURE_LEVEL"], "12_1")
+        XCTAssertEqual(env["VKD3D_RELAX_DEVICE_CAPS"], "1", "the route's other defaults still apply")
+        XCTAssertTrue(env["WINEDLLOVERRIDES"]!.contains("d3d12core=n,b"), "the composed entries still compose")
+        XCTAssertTrue(env["WINEDLLPATH_PREPEND"]!.contains("/vkd3d/wine"))
+    }
+
     /// B2: a pipeline cache compiled by one MoltenVK build and read by another gave wrong or hung
     /// pipelines on the arm64 line. The key follows every component's checksum, so a rebuilt
     /// component (same version, new patch) starts a new cache, and nothing else moves it.

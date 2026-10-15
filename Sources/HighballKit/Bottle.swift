@@ -793,7 +793,12 @@ public struct Bottle: Sendable {
         if !settings.dllOverrides.isEmpty { merge(&env, ["WINEDLLOVERRIDES+": settings.dllOverrides]) }
         merge(&env, ["WINEDLLOVERRIDES+": "winemenubuilder.exe=d"])
         merge(&env, settings.environment)
-        merge(&env, try effective.environment(engine: engine))
+        // The renderer's own variables are defaults (a declared feature level and shader model,
+        // the relax switches, its cache path): a value the bottle's environment carries, set by
+        // the player or a recipe, keeps its say. Only the "+" entries compose. The first launch
+        // of Microsoft Flight Simulator 2024 through the app had its Shader Model 6_7 replaced by
+        // the vkd3d route's 6_6 this way (2026-10-15).
+        merge(&env, try effective.environment(engine: engine).filter { key, _ in key.hasSuffix("+") || settings.environment[key] == nil })
         merge(&env, extra)
         // A game's recipe or the player may set DXMT_CONFIG too, a GPU identity for instance
         // (GTA V falls back to 800x600 on an Apple GPU, highball-db#72), and the merges above

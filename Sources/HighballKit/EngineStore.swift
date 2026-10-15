@@ -698,8 +698,15 @@ public struct InstalledEngine: Sendable {
     /// Environment every Wine process needs for this engine, before bottle/renderer settings.
     public func baseEnvironment() -> [String: String] {
         let fw = frameworksDir.path
+        // An arm64 engine's Wine opens its host libraries by leaf name (patch 0030 looks beside
+        // Wine only when that fails), and the GStreamer framework carries a stock libMoltenVK of
+        // its own: with the framework's lib on the fallback path alone, winevulkan got that copy
+        // instead of the engine's patched one, and DXVK refused the device (no Vulkan 1.3) on the
+        // first launch through the app (2026-10-15). The engine's lib goes first on this line.
+        var fallback = "\(fw):\(fw)/GStreamer.framework/Versions/1.0/lib"
+        if manifest.isNativeARM64 { fallback = engineDir.appending(path: "lib").path + ":" + fallback }
         var env: [String: String] = [
-            "DYLD_FALLBACK_LIBRARY_PATH": "\(fw):\(fw)/GStreamer.framework/Versions/1.0/lib",
+            "DYLD_FALLBACK_LIBRARY_PATH": fallback,
             "DYLD_FALLBACK_FRAMEWORK_PATH": fw,
             "GST_PLUGIN_PATH": "\(fw)/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0",
         ]
