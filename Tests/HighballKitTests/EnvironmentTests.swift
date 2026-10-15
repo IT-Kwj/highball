@@ -230,6 +230,22 @@ final class EnvironmentTests: XCTestCase {
                              "dxvk present but d9vk missing must throw, not fall back to wined3d")
     }
 
+    /// The arm64 line's DXVK is built without its d3d9 and the engine says Direct3D 9 stays on
+    /// Wine's own: there the DXVK mode serves Direct3D 10 and 11 alone instead of refusing to start.
+    func testDxvkWithoutD9vkOnAnEngineThatKeepsDirect3D9OnWine() throws {
+        let (base, bottle) = try fixtures()
+        var manifest = base.manifest
+        manifest.direct3D9 = "wined3d"
+        let engine = InstalledEngine(manifest: manifest, root: base.root)
+        let dxvk = engine.renderersDir.appending(path: "dxvk/wine")
+        try FileManager.default.createDirectory(at: dxvk, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: engine.root) }
+        let env = try bottle.environment(engine: engine, renderer: .dxvk)
+        XCTAssertEqual(env["WINEDLLPATH_PREPEND"], dxvk.path, "the dxvk overlay alone, no d9vk")
+        XCTAssertFalse(env["WINEDLLOVERRIDES"]?.contains("d3d9") ?? false, "d3d9 stays Wine's own")
+        XCTAssertTrue(env["WINEDLLOVERRIDES"]?.contains("d3d11=n,b") ?? false)
+    }
+
     /// OpenGL games asking for a 3.2+ core context without the forward-compatible bit crash on
     /// macOS unless Wine adds it; the engine's Mac driver reads this switch (highball#136).
     func testForwardCompatibleGLContextsAreOnForEveryLaunch() throws {

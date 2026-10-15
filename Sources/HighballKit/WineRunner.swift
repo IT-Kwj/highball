@@ -106,7 +106,7 @@ public struct WineRunner: Sendable {
         }
         // The Mac's output rate: a sound report is unanswerable without it (highball#127).
         if let audio = AudioOutput.headerLine(sampleRate: AudioOutput.defaultOutputSampleRate()) { out += audio }
-        for key in ["WINEDLLPATH_PREPEND", "WINEDLLOVERRIDES", "ROSETTA_ADVERTISE_AVX", "MTL_HUD_ENABLED", "CX_FWD_COMPAT_GL_CTX", "DXVK_CONFIG_FILE", "DXVK_LOG_PATH", "LSFGM_MULTIPLIER", "LSFGM_PACING_MODE", "LSFGM_FLOW_SCALE", "LSFGM_DLL_PATH"] {
+        for key in ["WINEDLLPATH_PREPEND", "WINEDLLOVERRIDES", "ROSETTA_ADVERTISE_AVX", "MTL_HUD_ENABLED", "CX_FWD_COMPAT_GL_CTX", "DXVK_CONFIG_FILE", "DXVK_LOG_PATH", "DXVK_CONFIG", "VKD3D_SHADER_MODEL", "VKD3D_FEATURE_LEVEL", "VKD3D_CONFIG", "VKD3D_SHADER_CACHE_PATH", "LSFGM_MULTIPLIER", "LSFGM_PACING_MODE", "LSFGM_FLOW_SCALE", "LSFGM_DLL_PATH"] {
             if let value = env[key] { out += "# \(key)=\(value)\n" }
         }
         // The generated dxvk.conf decides per-game behaviour, so quote it rather than making the
@@ -144,6 +144,7 @@ public struct WineRunner: Sendable {
         try bottle.prepareDLSSBridge(engine: engine, renderer: resolved.renderer)
         if resolved.renderer != .wined3d { try? bottle.writeDxvkConfig() }
         var env = try bottle.environment(engine: engine, renderer: renderer, extra: extraEnvironment)
+        bottle.prepareVkd3dCache(environment: env)
         // Wine fixes the sync mode when the prefix's wineserver starts; a process started with a
         // different one dies at msync_init before doing anything (issue #32: a registry write
         // "succeeding" in 0 s while a Steam window, cold-started with sync off, was open). So a

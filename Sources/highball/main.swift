@@ -108,7 +108,7 @@ struct Bottle: AsyncParsableCommand {
             let eng = try engine.map { try store.engine($0) } ?? EngineStore.defaultEngine(installed: store.installedEngines(), bundledID: nil)
             guard let eng else { fail("no engine installed") }
             print("creating bottle '\(name)' with \(eng.id) (wineboot takes ~90 s the first time)…")
-            var bottle = try await BottleStore().create(name: name, engine: eng, renderer: renderer ?? .dxmt)
+            var bottle = try await BottleStore().create(name: name, engine: eng, renderer: renderer)
             if renderer != nil {   // a flag the user typed is an explicit choice (#29)
                 bottle.settings.rendererExplicit = true
                 try bottle.save()

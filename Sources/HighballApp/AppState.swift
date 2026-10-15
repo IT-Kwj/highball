@@ -389,6 +389,12 @@ final class AppState {
     func fixRecipe(for item: LibraryItem) -> HighballKit.Recipe? {
         guard let entry = gameDB.entry(for: item),
               let recipe = Self.recipe(entry.id), recipe.kind == .game else { return nil }
+        // A recipe pinned to an engine this install does not see (a line still in preview) is not
+        // offered: the game page and Play stay as they were before the recipe existed.
+        let defaults = UserDefaults.standard
+        if EngineChannels.hidesPin(recipe.engine, bundled: Self.bundledManifests,
+                                   beta: defaults.bool(forKey: UpdateChannels.betaDefaultsKey),
+                                   preview: defaults.bool(forKey: EngineChannels.previewDefaultsKey)) { return nil }
         return recipe
     }
 
@@ -2463,7 +2469,8 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.name, bottleName: bottle.name, appid: game.appid, markers: markers,
-                                     renderer: servedRenderer.rawValue), processList: box.processList)
+                                     renderer: servedRenderer.rawValue, startNotice: entry?.startNotice,
+                                     startNoticeMinutes: entry?.startNoticeMinutes), processList: box.processList)
         }
     }
 
@@ -2721,7 +2728,8 @@ final class AppState {
                 }
             }
             // The variables this game's recipe scoped to it (highball#198), on top of Legendary's.
-            let gameEnvironment = bottle.settings.environment(forGame: gameDB.byEpicAppName[game.app_name]?.id)
+            let row = gameDB.byEpicAppName[game.app_name]
+            let gameEnvironment = bottle.settings.environment(forGame: row?.id)
             watchedLaunch(box) {
                 try await runner.start(executable, arguments: arguments,
                                        renderer: renderer, extraEnvironment: info.environment.merging(gameEnvironment) { _, new in new },
@@ -2741,7 +2749,8 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.app_title, bottleName: bottle.name, appid: nil, markers: markers,
-                                     renderer: (renderer ?? bottle.settings.renderer).rawValue), processList: box.processList)
+                                     renderer: (renderer ?? bottle.settings.renderer).rawValue, startNotice: row?.startNotice,
+                                     startNoticeMinutes: row?.startNoticeMinutes), processList: box.processList)
         }
     }
 
@@ -2812,10 +2821,20 @@ final class AppState {
             ?? repoRoot?.appending(path: "spike/engine-manifest.json")
     }
 
-    /// Every engine manifest the app ships: the default one plus `engines/*.json` (previous
-    /// engines kept for rollback, candidates offered in Advanced). A bottle can move to any of
+    /// Every engine manifest this install may see: the bundled ones minus those whose channel it
+    /// does not get (EngineChannels; a preview line ships hidden). A bottle can move to any of
     /// them; one that is not installed downloads first.
     static var knownManifests: [EngineManifest] {
+        let defaults = UserDefaults.standard
+        let beta = defaults.bool(forKey: UpdateChannels.betaDefaultsKey)
+        let preview = defaults.bool(forKey: EngineChannels.previewDefaultsKey)
+        return bundledManifests.filter { EngineChannels.visible(channel: $0.channel, beta: beta, preview: preview) }
+    }
+
+    /// Every engine manifest the app ships, visible or not: the default one plus
+    /// `engines/*.json` (previous engines kept for rollback, candidates offered in Advanced,
+    /// lines still in preview).
+    static var bundledManifests: [EngineManifest] {
         var urls: [URL] = []
         if let m = bundledManifest { urls.append(m) }
         if let dir = Bundle.main.resourceURL?.appending(path: "engines"),
@@ -2896,6 +2915,14 @@ final class AppState {
     }
 
     /// What the bottle's Engine picker lists: installed engines, then known ones to download.
+    /// Whether `bottle` may move to `target` (EngineStore.sameArch). The bottle's engine is read
+    /// from the installed list, and from the bundled manifests only when its folder is gone.
+    func canMove(_ bottle: Bottle, to target: EngineManifest) -> Bool {
+        let id = bottle.settings.engineID
+        let arch = engines.first { $0.id == id }?.manifest.arch ?? Self.bundledManifests.first { $0.id == id }?.arch
+        return EngineStore.sameArch(current: arch, target: target.arch)
+    }
+
     func offeredEngines(for bottle: Bottle) -> [EngineStore.OfferedEngine] {
         EngineStore.offeredEngines(installed: engines, known: Self.knownManifests, current: bottle.settings.engineID)
     }
@@ -2904,6 +2931,11 @@ final class AppState {
     /// bundled manifest. Licenses accepted on any installed engine carry over.
     func moveBottle(_ bottle: Bottle, toEngineID id: String, done: DoneState? = nil) {
         guard !busy else { return }
+        if let target = engines.first(where: { $0.id == id })?.manifest ?? Self.knownManifests.first(where: { $0.id == id }),
+           !canMove(bottle, to: target) {
+            appendLog("\(bottle.name) stays on \(bottle.settings.engineID): \(id) is built for another architecture, and an environment does not move between the two")
+            return
+        }
         if let installed = engines.first(where: { $0.id == id }) { moveBottle(bottle, to: installed, done: done); return }
         guard let manifest = Self.knownManifests.first(where: { $0.id == id }) else { return }
         let accepted = Set(engines.flatMap { $0.manifest.acceptedLicenses ?? [] })

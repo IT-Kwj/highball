@@ -36,6 +36,10 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
             env["DXVK_RELAX_FEATURES"] = "1"
             env["VKD3D_FEATURE_LEVEL"] = "12_0"
             env["VKD3D_SHADER_MODEL"] = "6_6"
+            // The pipeline cache goes in the prefix, one folder per engine build (B2): without a
+            // path vkd3d-proton writes it beside the game's executable, where it outlives the
+            // MoltenVK and renderer builds that compiled it.
+            env["VKD3D_SHADER_CACHE_PATH"] = Bottle.vkd3dCacheWindowsRoot + "\\" + engine.manifest.vkd3dCacheKey
         case .dxmt:
             guard let dir = engine.rendererDir("dxmt") else { throw HighballError.missing(unavailableReason(in: engine) ?? "dxmt renderer in engine \(engine.id)") }
             env["WINEDLLPATH_PREPEND"] = Self.withD9VK(dir.appending(path: "wine").path, engine: engine)
@@ -68,9 +72,17 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
             // support all features (CSM)" (#21). d9vk is required for .dxvk: a missing overlay
             // must fail loudly, never silently regress D3D9 back to wined3d.
             guard let dxvk = engine.rendererDir("dxvk") else { throw HighballError.missing("dxvk renderer in engine \(engine.id)") }
-            guard let d9vk = engine.rendererDir("d9vk") else { throw HighballError.missing("d9vk (DXVK D3D9) renderer in engine \(engine.id)") }
-            env["WINEDLLPATH_PREPEND"] = [d9vk.appending(path: "wine").path, dxvk.appending(path: "wine").path].joined(separator: ":")
-            env["WINEDLLOVERRIDES+"] = "dxgi,d3d9,d3d10core,d3d11=n,b"
+            if let d9vk = engine.rendererDir("d9vk") {
+                env["WINEDLLPATH_PREPEND"] = [d9vk.appending(path: "wine").path, dxvk.appending(path: "wine").path].joined(separator: ":")
+                env["WINEDLLOVERRIDES+"] = "dxgi,d3d9,d3d10core,d3d11=n,b"
+            } else if engine.manifest.direct3D9 == "wined3d" {
+                // An engine that keeps Direct3D 9 on Wine's own and ships no d9vk at all (the
+                // arm64 line, whose DXVK is built without its d3d9): DXVK serves 10 and 11 only.
+                env["WINEDLLPATH_PREPEND"] = dxvk.appending(path: "wine").path
+                env["WINEDLLOVERRIDES+"] = "dxgi,d3d10core,d3d11=n,b"
+            } else {
+                throw HighballError.missing("d9vk (DXVK D3D9) renderer in engine \(engine.id)")
+            }
         }
         return env
     }
@@ -198,6 +210,13 @@ public enum Renderer: String, Codable, CaseIterable, Sendable {
     /// The best renderer `engine` can run in place of `wanted`. Never `wanted` itself.
     public static func fallback(for wanted: Renderer, in engine: InstalledEngine) -> Renderer {
         fallbackOrder.first { $0 != wanted && $0.availability(in: engine) == .available } ?? .wined3d
+    }
+
+    /// The mode a new environment starts on: the first in `fallbackOrder` this engine can run.
+    /// DXMT on every Intel engine, as before; DXVK on an engine without DXMT (the arm64 line),
+    /// rather than a DXMT setting that would degrade at every launch.
+    public static func defaultMode(for engine: InstalledEngine) -> Renderer {
+        fallbackOrder.first { $0.availability(in: engine) == .available } ?? .wined3d
     }
 
     public static func displayName(_ r: Renderer) -> String {
@@ -774,7 +793,12 @@ public struct Bottle: Sendable {
         if !settings.dllOverrides.isEmpty { merge(&env, ["WINEDLLOVERRIDES+": settings.dllOverrides]) }
         merge(&env, ["WINEDLLOVERRIDES+": "winemenubuilder.exe=d"])
         merge(&env, settings.environment)
-        merge(&env, try effective.environment(engine: engine))
+        // The renderer's own variables are defaults (a declared feature level and shader model,
+        // the relax switches, its cache path): a value the bottle's environment carries, set by
+        // the player or a recipe, keeps its say. Only the "+" entries compose. The first launch
+        // of Microsoft Flight Simulator 2024 through the app had its Shader Model 6_7 replaced by
+        // the vkd3d route's 6_6 this way (2026-10-15).
+        merge(&env, try effective.environment(engine: engine).filter { key, _ in key.hasSuffix("+") || settings.environment[key] == nil })
         merge(&env, extra)
         // A game's recipe or the player may set DXMT_CONFIG too, a GPU identity for instance
         // (GTA V falls back to 800x600 on an Apple GPU, highball-db#72), and the merges above
@@ -856,7 +880,8 @@ public struct Bottle: Sendable {
             let inserted = (env["DYLD_INSERT_LIBRARIES"] ?? "").split(separator: ":").map(String.init)
             env["DYLD_INSERT_LIBRARIES"] = ([lib.path] + inserted.filter { $0 != lib.path }).joined(separator: ":")
         }
-        return env
+        // A recipe's value can depend on this Mac (a video memory budget from its memory).
+        return env.mapValues { MacVariables.expand($0) }
     }
 
     /// The renderer-specific bridge files that make the DLSS switch actionable in this engine.
@@ -894,6 +919,25 @@ public struct Bottle: Sendable {
     public static let dxvkConfigWindowsPath = #"C:\highball\dxvk.conf"#
     /// Unix location of the same file.
     public var dxvkConfigURL: URL { driveC.appending(path: "highball/dxvk.conf") }
+
+    /// Where the vkd3d mode keeps vkd3d-proton's pipeline caches, as Windows sees it and on disk.
+    public static let vkd3dCacheWindowsRoot = "C:\\highball\\cache\\vkd3d"
+    public var vkd3dCacheRoot: URL { driveC.appending(path: "highball/cache/vkd3d", directoryHint: .isDirectory) }
+
+    /// Makes the cache folder a launch's environment names, when it is one of Highball's, and
+    /// removes the folders other engine builds left beside it. A path a recipe set elsewhere is
+    /// left alone.
+    public func prepareVkd3dCache(environment env: [String: String]) {
+        let prefix = Self.vkd3dCacheWindowsRoot + "\\"
+        guard let path = env["VKD3D_SHADER_CACHE_PATH"], path.hasPrefix(prefix) else { return }
+        let key = String(path.dropFirst(prefix.count))
+        guard !key.isEmpty, !key.contains("\\"), !key.contains("/") else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: vkd3dCacheRoot.appending(path: key), withIntermediateDirectories: true)
+        for old in (try? fm.contentsOfDirectory(atPath: vkd3dCacheRoot.path)) ?? [] where old != key {
+            try? fm.removeItem(at: vkd3dCacheRoot.appending(path: old))
+        }
+    }
     /// Windows path DXVK writes its per-process logs to, and its Unix location.
     public static let dxvkLogWindowsPath = #"C:\highball\logs"#
     public var dxvkLogURL: URL { driveC.appending(path: "highball/logs") }
@@ -980,7 +1024,8 @@ public struct Bottle: Sendable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // DXVK only writes its per-process log if the directory exists.
         try FileManager.default.createDirectory(at: dxvkLogURL, withIntermediateDirectories: true)
-        let content = Self.dxvkConfig(async: settings.dxvkAsync, appConfig: settings.dxvkAppConfig)
+        let appConfig = settings.dxvkAppConfig.mapValues { $0.mapValues { MacVariables.expand($0) } }
+        let content = Self.dxvkConfig(async: settings.dxvkAsync, appConfig: appConfig)
         if (try? String(contentsOf: dxvkConfigURL, encoding: .utf8)) != content {
             try content.write(to: dxvkConfigURL, atomically: true, encoding: .utf8)
         }

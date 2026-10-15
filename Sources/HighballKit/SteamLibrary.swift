@@ -253,6 +253,13 @@ public struct GameDBEntry: Codable, Sendable {
     /// A native macOS edition. Highball marks the ones on Steam (the same purchase); `available:
     /// false` marks a Mac port that no longer runs, which outranks the store's flag (MacSteamBuild).
     public var nativeMac: NativeMacInfo?
+    /// A sentence the activity strip shows under the running game while it starts, for a game
+    /// whose own loading is long enough that a player would think it failed: Microsoft Flight
+    /// Simulator 2024 on the arm64 engine prepares its shaders for 6 to 7 minutes behind a still
+    /// window, after its process has appeared and Highball's start sheet has closed. Shown for
+    /// `startNoticeMinutes` after that, 15 when the row does not say. Data, not code.
+    public var startNotice: String?
+    public var startNoticeMinutes: Int?
 
     /// Any kind of block: kernel anti-cheat, or a publisher that stops the game on macOS on purpose
     /// (World of Warships). The game cannot run, so no renderer advice and no Play.

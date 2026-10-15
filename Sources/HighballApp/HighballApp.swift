@@ -409,6 +409,9 @@ private extension View {
                 Button(String(format: L("Use '%@'"), fit.name)) { state.useEnvironment(fit, for: pending.recipe, item: item) }
                 Button(String(format: L("New environment for %@"), pending.recipe.title)) { state.createEnvironment(for: pending.recipe, on: pending.manifest, item: pending.item) }
                 Button(L("Not now"), role: .cancel) { state.pendingEngine = nil }
+            } else if !state.canMove(pending.bottle, to: pending.manifest) {
+                Button(String(format: L("New environment for %@"), pending.recipe.title)) { state.createEnvironment(for: pending.recipe, on: pending.manifest, item: pending.item) }
+                Button(L("Not now"), role: .cancel) { state.pendingEngine = nil }
             } else if others > 0 {
                 Button(String(format: L("New environment for %@"), pending.recipe.title)) { state.createEnvironment(for: pending.recipe, on: pending.manifest, item: pending.item) }
                 Button(L("Move this environment")) { state.moveEnvironment(for: pending.recipe, bottle: pending.bottle, to: pending.manifest) }
@@ -421,7 +424,8 @@ private extension View {
         } message: { pending in
             Text(GamePageCopy.engineAsk(recipe: pending.recipe, manifest: pending.manifest, installed: state.engines.contains { $0.id == pending.manifest.id },
                                         others: state.otherProgramCount(in: pending.bottle, besides: pending.recipe),
-                                        existing: pending.fit.map { ($0.name, pending.item?.otherBottles.contains($0.name) == true) }))
+                                        existing: pending.fit.map { ($0.name, pending.item?.otherBottles.contains($0.name) == true) },
+                                        canMove: state.canMove(pending.bottle, to: pending.manifest)))
         }
     }
     @MainActor func updateAsk(_ state: AppState) -> some View {

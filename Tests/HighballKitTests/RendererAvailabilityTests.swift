@@ -46,6 +46,15 @@ final class RendererAvailabilityTests: XCTestCase {
         return b
     }
 
+    // MARK: A new environment's mode
+
+    func testANewEnvironmentStartsOnTheFirstModeItsEngineRuns() throws {
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(accepted: false)), .dxmt, "every Intel engine keeps DXMT")
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(ships: ["dxvk", "vkd3d"], accepted: false)), .dxvk,
+                       "no DXMT (the arm64 line): DXVK, not a DXMT setting that degrades at every launch")
+        XCTAssertEqual(Renderer.defaultMode(for: try engine(ships: [], accepted: false)), .wined3d)
+    }
+
     // MARK: Direct3D 12-only programs (highball#139)
 
     func testADirect3D12OnlyProgramGetsAModeThatHasIt() throws {
@@ -216,11 +225,67 @@ final class RendererAvailabilityTests: XCTestCase {
         XCTAssertEqual(env["VKD3D_SHADER_MODEL"], "6_6")
         XCTAssertEqual(env["VKD3D_RELAX_DEVICE_CAPS"], "1")
         XCTAssertEqual(env["DXVK_RELAX_FEATURES"], "1")
+        XCTAssertEqual(env["VKD3D_SHADER_CACHE_PATH"], "C:\\highball\\cache\\vkd3d\\" + e.manifest.vkd3dCacheKey,
+                       "B2: the pipeline cache lives in the prefix, one folder per engine build")
         let without = try engine(ships: ["dxmt", "dxvk", "d9vk"], accepted: false)
         XCTAssertEqual(Renderer.vkd3d.availability(in: without), .notShipped)
         XCTAssertThrowsError(try Renderer.vkd3d.environment(engine: without))
         XCTAssertEqual(Renderer.fallback(for: .vkd3d, in: e), .dxmt, "a bottle set to it degrades to the default, never to another DirectX 12 route")
         XCTAssertFalse(Renderer.fallbackOrder.contains(.vkd3d), "never a fallback for other modes")
+    }
+
+    /// A variable the bottle carries, from a recipe or the player, outranks the route's declared
+    /// defaults: Microsoft Flight Simulator 2024 asks for Shader Model 6.7 and its recipe says so,
+    /// and the first launch through the app had it replaced by the route's 6_6 (2026-10-15).
+    func testBottleVariablesOutrankTheRouteDefaults() throws {
+        let e = try engine(ships: ["dxmt", "dxvk", "d9vk", "vkd3d"], accepted: false)
+        var b = bottle(renderer: .vkd3d, explicit: true)
+        b.settings.environment["VKD3D_SHADER_MODEL"] = "6_7"
+        b.settings.environment["VKD3D_FEATURE_LEVEL"] = "12_1"
+        let env = try b.environment(engine: e)
+        XCTAssertEqual(env["VKD3D_SHADER_MODEL"], "6_7")
+        XCTAssertEqual(env["VKD3D_FEATURE_LEVEL"], "12_1")
+        XCTAssertEqual(env["VKD3D_RELAX_DEVICE_CAPS"], "1", "the route's other defaults still apply")
+        XCTAssertTrue(env["WINEDLLOVERRIDES"]!.contains("d3d12core=n,b"), "the composed entries still compose")
+        XCTAssertTrue(env["WINEDLLPATH_PREPEND"]!.contains("/vkd3d/wine"))
+    }
+
+    /// B2: a pipeline cache compiled by one MoltenVK build and read by another gave wrong or hung
+    /// pipelines on the arm64 line. The key follows every component's checksum, so a rebuilt
+    /// component (same version, new patch) starts a new cache, and nothing else moves it.
+    func testVkd3dCacheKeyFollowsTheComponentsBuild() throws {
+        let m = try manifest()
+        XCTAssertEqual(m.vkd3dCacheKey, try manifest().vkd3dCacheKey, "stable for one build")
+        XCTAssertTrue(m.vkd3dCacheKey.hasPrefix(m.id + "-"))
+        XCTAssertEqual(m.vkd3dCacheKey.count, m.id.count + 9)
+        var rebuilt = m
+        let name = m.components.keys.sorted().last!
+        rebuilt.components[name]!.sha256 = String(repeating: "0", count: 64)
+        XCTAssertNotEqual(rebuilt.vkd3dCacheKey, m.vkd3dCacheKey, "a rebuilt component starts a new cache")
+        var renamed = m
+        renamed.displayName = "Something else"
+        renamed.notes = ["a note"]
+        XCTAssertEqual(renamed.vkd3dCacheKey, m.vkd3dCacheKey, "only the binaries count")
+    }
+
+    func testALaunchMakesItsCacheFolderAndDropsOtherBuildsCaches() throws {
+        let fm = FileManager.default
+        let b = Bottle(url: root.appending(path: "bottle"), settings: BottleSettings(name: "t", engineID: "e"))
+        let stale = b.vkd3dCacheRoot.appending(path: "old-engine-12345678")
+        try fm.createDirectory(at: stale, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: stale.appending(path: "vkd3d-proton.cache"))
+        b.prepareVkd3dCache(environment: ["VKD3D_SHADER_CACHE_PATH": "C:\\highball\\cache\\vkd3d\\new-engine-abcdef01"])
+        XCTAssertTrue(fm.fileExists(atPath: b.vkd3dCacheRoot.appending(path: "new-engine-abcdef01").path))
+        XCTAssertFalse(fm.fileExists(atPath: stale.path), "another build's cache is removed")
+
+        let kept = b.vkd3dCacheRoot.appending(path: "new-engine-abcdef01/vkd3d-proton.cache")
+        try Data("y".utf8).write(to: kept)
+        b.prepareVkd3dCache(environment: ["VKD3D_SHADER_CACHE_PATH": "C:\\highball\\cache\\vkd3d\\new-engine-abcdef01"])
+        XCTAssertTrue(fm.fileExists(atPath: kept.path), "the current build's cache survives the next launch")
+
+        b.prepareVkd3dCache(environment: ["VKD3D_SHADER_CACHE_PATH": "C:\\games\\cache"])
+        b.prepareVkd3dCache(environment: [:])
+        XCTAssertTrue(fm.fileExists(atPath: kept.path), "a path a recipe set elsewhere, or none, touches nothing")
     }
 
     func testSuggestionOffersTheOtherDirectX12RouteAfterAppleFails() {

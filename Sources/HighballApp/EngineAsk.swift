@@ -10,7 +10,7 @@ extension GamePageCopy {
     }
 
     static func downloadSize(_ m: EngineManifest) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(m.components.values.compactMap(\.size).reduce(0, +)), countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: Int64(m.downloadBytes), countStyle: .file)
     }
 
     /// The fix names an engine this build does not ship: the database moved ahead of the app.
@@ -25,12 +25,25 @@ extension GamePageCopy {
     /// the hard way when an old revision could not show Steam's window (highball#262).
     /// `existing` names an environment already on that engine and whether the game is installed
     /// in it; the ask then offers it first (highball-db#318).
+    /// `canMove` is false when the environment's engine is of another architecture than the
+    /// recipe's (EngineStore.sameArch): only a new environment is offered then.
     static func engineAsk(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool, others: Int,
-                          existing: (name: String, holdsGame: Bool)? = nil) -> String {
-        guard let existing else { return engineAskBody(recipe: recipe, manifest: manifest, installed: installed, others: others) }
+                          existing: (name: String, holdsGame: Bool)? = nil, canMove: Bool = true) -> String {
+        guard let existing else {
+            guard canMove else { return engineAskOtherArch(recipe: recipe, manifest: manifest, installed: installed) }
+            return engineAskBody(recipe: recipe, manifest: manifest, installed: installed, others: others)
+        }
         return existing.holdsGame
             ? String(format: L("'%@' is already on the %@ engine and has the game installed, so it plays there. This environment stays as it is."), existing.name, shortEngineName(manifest))
             : String(format: L("'%@' is already on the %@ engine. Using it installs the game there, with what it needs, and this environment stays as it is."), existing.name, shortEngineName(manifest))
+    }
+
+    private static func engineAskOtherArch(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool) -> String {
+        let download = installed ? "" : String(format: L(", after a download of about %@"), downloadSize(manifest))
+        let text = manifest.isNativeARM64
+            ? L("%@ is verified on the %@ engine, which runs natively on Apple silicon. This environment's engine runs through Rosetta, so the environment cannot move to it. A new environment starts empty%@, and the game has to be installed again.")
+            : L("%@ is verified on the %@ engine, which runs through Rosetta. This environment's engine runs natively on Apple silicon, so the environment cannot move to it. A new environment starts empty%@, and the game has to be installed again.")
+        return String(format: text, recipe.title, shortEngineName(manifest), download)
     }
 
     private static func engineAskBody(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool, others: Int) -> String {

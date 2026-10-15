@@ -1,0 +1,74 @@
+{
+  "$schema": "https://highball.app/schemas/engine-manifest/v0",
+  "id": "arm64-wine11.18-r1",
+  "displayName": "Wine 11.18 native arm64 (preview) r1",
+  "arch": "arm64",
+  "minMacOS": "15.0",
+  "requires": [],
+  "channel": "preview",
+  "direct3D9": "wined3d",
+  "notes": [
+    "r1 (2026-10-15): the first build of Highball's native arm64 line, shown only to installs with the preview key (defaults write app.highball.Highball previewEngines -bool true). Wine 11.18 from WineHQ's development release, built for Apple silicon as ARM64X images with Highball's patches-arm64 0001 to 0038; x86 and x86-64 programs run through FEX 2610 (fex/patches 0001 to 0018) inside Wine instead of Rosetta, and the loader is Highball's signed helper. Made for Microsoft Flight Simulator 2024, which the Intel engines cannot start, and meant to carry every game once macOS 28 retires most of Rosetta.",
+    "Direct3D 12, 11 and 10 go through vkd3d-proton and DXVK on MoltenVK 1.4.2 with Highball's patches 0001 to 0012 (renderer vkd3d or dxvk; no DXMT and no D3DMetal on this line, Direct3D 9 is Wine's own). Game videos play through GStreamer with VideoToolbox decoding.",
+    "A second start of a game compiles no shader again: MoltenVK keeps a pipeline cache per game and device on disk (patch 0012), each game has its own Metal shader cache folder (patch 0038), and MoltenVK compresses the MSL it keeps (MVK_CONFIG_SHADER_SOURCE_COMPRESSION_ALGORITHM in baseEnv). Microsoft Flight Simulator 2024 reaches its start screen in about six minutes on a base M4 after the first start (about nine before), with the time left in its own package activation.",
+    "Measured on a base M4 (32 GB, macOS 27.0): Microsoft Flight Simulator 2024 at the Medium preset in 1080p flies at 19 to 20 fps parked and 15 to 18 fps on the take-off roll, steady over a 25-minute park at 17 to 18 GB of memory, no GPU errors. Known: the main menu's globe shows pale wedge-shaped slabs over the oceans; a small black diamond flashes at the left of the windscreen at camera changes; motion blur is best off in the game's settings (it smears the picture at these frame rates).",
+    "Environments on this engine are new ones: an environment never moves between an Intel engine and this line. The engine's renderers are the vkd3d and dxvk folders of the renderers component, loaded through WINEDLLPATH as on the Intel line."
+  ],
+  "components": {
+    "wine": {
+      "kind": "engine",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/engine-arm64-wine-11.18-20261015T181931Z-arm64-r1/engine-arm64-wine-11.18-20261015T181931Z-arm64-r1.tar.gz",
+      "size": 402747183,
+      "sha256": "01dd2f619367968bfdd38d41042a24704c99811be5c08fc219f87c63fdb19fb0",
+      "extract": { "into": "engine", "subpath": "engine" },
+      "license": "LGPL-2.1+",
+      "version": "wine-11.18 (WineHQ) Highball arm64 build 2026-10-15, patches-arm64 0001-0038, FEX 2610 with fex/patches 0001-0018, Wine Mono 11.3.0 and Gecko 2.47.4 included",
+      "note": "Built from WineHQ's wine-11.18.tar.xz (sha pinned in highball-engine/inputs-arm64.json) by highball-engine's build-arm64 workflow (run 38783113930, branch arm64-boot-caches) with llvm-mingw 20260922 for the ARM64X PE side and FEX from source under Wine's emulator names (xtajit64.dll, xtajit.dll). Stripped. The host libraries Wine opens by name (MoltenVK, FreeType, GnuTLS, SDL) and what they link sit in engine/lib (patch 0030). The archive also holds the frameworks folder."
+    },
+    "frameworks": {
+      "kind": "frameworks",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/engine-arm64-wine-11.18-20261015T181931Z-arm64-r1/engine-arm64-wine-11.18-20261015T181931Z-arm64-r1.tar.gz",
+      "size": 402747183,
+      "sha256": "01dd2f619367968bfdd38d41042a24704c99811be5c08fc219f87c63fdb19fb0",
+      "extract": { "into": "frameworks", "subpath": "frameworks" },
+      "license": "mixed (LGPL-2.1 GStreamer 1.28.7 and its plugins, Apache-2.0 MoltenVK inside the GStreamer framework)",
+      "version": "GStreamer 1.28.7 (the official macOS framework, pruned to the plugins winegstreamer uses, with applemedia for VideoToolbox decoding, thinned to arm64)",
+      "note": "The same archive as the wine component, its frameworks folder; the store downloads it once."
+    },
+    "moltenvk": {
+      "kind": "runtime",
+      "order": 1,
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/moltenvk-arm64-1.4.2-20261015T181815Z-arm64-r1/moltenvk-arm64-1.4.2-20261015T181815Z-arm64-r1.tar.gz",
+      "size": 1588994,
+      "sha256": "feaab38ab4a991f145f4db10e922d247e25c5722e0873a9285ba1cb477d18496",
+      "extract": { "into": "engine/lib/libMoltenVK.dylib", "subpath": "lib/libMoltenVK.dylib" },
+      "license": "Apache-2.0",
+      "version": "MoltenVK 1.4.2 with Highball's moltenvk-arm64 patches 0001-0012 and SPIRV-Cross patches 0001-0004",
+      "note": "Replaces the engine's own libMoltenVK.dylib in engine/lib, the one Wine's winevulkan opens on this line (so it installs after the wine component). Built by highball-engine's build-moltenvk-arm64 workflow (run 38783118608). 0001 rebinds descriptor sets after MoltenVK's helpers, 0011 keeps attachment-less render passes within the GPU's size limit, 0012 keeps an implicit pipeline cache per game and device on disk."
+    },
+    "renderers": {
+      "kind": "renderer",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/renderers-arm64-20261015T181326Z-arm64-r1/renderers-arm64-20261015T181326Z-arm64-r1.tar.gz",
+      "size": 11817971,
+      "sha256": "9476a69f2b4fc63c4da25888e1d36a41e5f1884f7c39809e1c03c1c577e15136",
+      "extract": { "into": "renderers", "subpath": "renderers" },
+      "license": "mixed (LGPL-2.1 vkd3d-proton, zlib DXVK)",
+      "version": "vkd3d-proton 3.1 and DXVK 3.1 for MoltenVK, ARM64EC builds with highball-engine's renderers-arm64 patches",
+      "note": "renderers/vkd3d/wine (d3d12, d3d12core, dxgi, d3d11, d3d10core as native DLLs) and renderers/dxvk/wine, loaded through WINEDLLPATH when the environment's graphics mode is vkd3d or dxvk. Built by build-renderers-arm64 (run 38783123603)."
+    }
+  },
+  "baseEnv": {
+    "GST_PLUGIN_PATH": "${frameworks}/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0",
+    "WINEDEBUG": "fixme-all",
+    "MVK_CONFIG_SHADER_SOURCE_COMPRESSION_ALGORITHM": "1",
+    "MVK_CONFIG_RESUME_LOST_DEVICE": "1",
+    "DXVK_RELAX_FEATURES": "1"
+  },
+  "verified": {
+    "date": "2026-10-15",
+    "macos": "27.0",
+    "chip": "Apple M4",
+    "result": "The engine archive, MoltenVK and renderers of these exact releases flew Microsoft Flight Simulator 2024 on the M4 through Highball's test harness (not yet through the app's installer): boot to the cockpit at Gibraltar, 30 s park and take-off roll. The app install from this manifest is still to be done."
+  },
+  "licenses": {}
+}
