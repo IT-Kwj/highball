@@ -75,3 +75,41 @@ final class PEExportNameTests: XCTestCase {
         XCTAssertEqual(PEExportName.read(try PEExportName.patched(d, to: "apd12.dll")), "apd12.dll")
     }
 }
+
+/// The copy of D3DMetal's d3d12.dll laid out behind the timestamp shim follows the D3DMetal files by
+/// content. D3DMetal 4.0 beta 2 and beta 3 ship d3d12.dll at the same size, and an unpacked file keeps
+/// its build date, so the earlier size and date check kept beta 2's copy in front of beta 3 when the
+/// D3DMetal files were replaced inside an engine (2026-10-15).
+final class TimestampShimLayoutTests: XCTestCase {
+    func testTheCopyFollowsD3DMetalWhenItChangesAtTheSameSize() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "hb-shim-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let d3dmetal = root.appending(path: "renderers/d3dmetal")
+        let realPE = d3dmetal.appending(path: "wine/x86_64-windows/d3d12.dll")
+        try fm.createDirectory(at: realPE.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: d3dmetal.appending(path: "wine/x86_64-unix"), withIntermediateDirectories: true)
+        try Data().write(to: d3dmetal.appending(path: "wine/x86_64-unix/d3d12.so"))
+        let shimPE = root.appending(path: "renderers/d3dmetal-tsshim/wine/x86_64-windows/d3d12.dll")
+        try fm.createDirectory(at: shimPE.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("shim".utf8).write(to: shimPE)
+        var m = EngineManifest(id: "x64-test-r1", displayName: "test", arch: "x86_64", minMacOS: "14.0", components: [:])
+        m.acceptedLicenses = [EngineManifest.gatedRenderers["d3dmetal"]!]
+        let engine = InstalledEngine(manifest: m, root: root)
+
+        var beta2 = SyntheticPE.make(exportName: "d3d12.dll"); beta2[0x500] = 2
+        var beta3 = SyntheticPE.make(exportName: "d3d12.dll"); beta3[0x500] = 3
+        XCTAssertEqual(beta2.count, beta3.count)
+        try beta2.write(to: realPE)
+        let shim = try XCTUnwrap(engine.timestampShimDir(d3dmetal: d3dmetal))
+        let copy = shim.appending(path: "wine/x86_64-windows/\(InstalledEngine.shimRealName).dll")
+        XCTAssertEqual(try Data(contentsOf: copy), try PEExportName.patched(beta2, to: "apd12.dll"))
+
+        try beta3.write(to: realPE)
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -86400 * 30)], ofItemAtPath: realPE.path)
+        _ = try XCTUnwrap(engine.timestampShimDir(d3dmetal: d3dmetal))
+        XCTAssertEqual(try Data(contentsOf: copy), try PEExportName.patched(beta3, to: "apd12.dll"),
+                       "same size and an older date, still replaced")
+        XCTAssertEqual(PEExportName.read(try Data(contentsOf: copy)), "apd12.dll")
+    }
+}

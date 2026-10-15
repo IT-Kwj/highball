@@ -52,6 +52,11 @@ cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 # needs it; a debug build on an older Xcode (CI's macos-15 runners, a contributor's Mac) goes on
 # without the helper, which only an arm64 engine would use and none ships yet (PR gate failure on
 # highball#260, 2026-10-05: "ld: unknown options: -x86_64_layout_emulation").
+# The games category is what lets macOS Game Mode engage: gamepolicyd labels a process a game from
+# its bundle's LSApplicationCategoryType (labelReason=appStoreCategory) and enables the mode while a
+# labeled process has input focus. A bare Wine loader is never labeled, and these exact keys without
+# the category were not either; with it, a child Wine process started through an engine symlink was
+# (an x86_64 loader in a bundle with these keys, M3 Pro, macOS 15.5, 2026-10-13).
 HELPER="$APP/Contents/Helpers/WineLoader.app"
 HAVE_LOADER=1
 if ! spike/wineloader/build.sh >/dev/null 2>dist/wineloader-build.err; then
@@ -77,6 +82,7 @@ cat > "$HELPER/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>LSBackgroundOnly</key><true/>
   <key>LSMinimumSystemVersion</key><string>26.5</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 </dict></plist>
 PLIST
 LOADER_PROFILE=private/signing/Highball_Wine_Loader_Developer_ID.provisionprofile

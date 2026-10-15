@@ -106,6 +106,42 @@ public enum SteamLibrary {
         return folders
     }
 
+    /// The `steamapps` folder of each library folder, the environment's own first, symlinks
+    /// resolved: where Steam writes its install records. The library's watcher covers all of
+    /// them, since an install into a second library folder (an external drive) used to reach
+    /// the game's page only with the next full refresh (highball#286).
+    public static func steamappsDirectories(of bottle: Bottle) -> [URL] {
+        guard let root = steamRoot(of: bottle) else { return [] }
+        return steamappsDirectories(steamRoot: root, bottleURL: bottle.url)
+    }
+
+    static func steamappsDirectories(steamRoot root: URL, bottleURL: URL) -> [URL] {
+        libraryFolders(steamRoot: root, bottleURL: bottleURL).map { $0.appending(path: "steamapps").resolvingSymlinksInPath() }
+    }
+
+    /// A cheap fingerprint of the install records: each appmanifest's path and modification date
+    /// across the library folders. Steam writes a record as an install starts, advances and
+    /// finishes, so the Steam client watch compares this every few seconds and catches what the
+    /// directory watcher cannot hear, such as a library folder added while the app runs or a
+    /// steamapps Steam recreated under a watch. In highball#286 an Age of Empires II HD install
+    /// finished in Steam while its page kept offering Install.
+    public static func installSignature(of bottle: Bottle) -> String {
+        guard let root = steamRoot(of: bottle) else { return "" }
+        return installSignature(steamRoot: root, bottleURL: bottle.url)
+    }
+
+    static func installSignature(steamRoot root: URL, bottleURL: URL) -> String {
+        var records: [String] = []
+        for steamapps in steamappsDirectories(steamRoot: root, bottleURL: bottleURL) {
+            let entries = (try? FileManager.default.contentsOfDirectory(at: steamapps, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            for url in entries where url.lastPathComponent.hasPrefix("appmanifest_") && url.pathExtension == "acf" {
+                let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                records.append("\(url.path) \(date?.timeIntervalSince1970 ?? 0)")
+            }
+        }
+        return records.sorted().joined(separator: "\n")
+    }
+
     /// The `"path"` values of a libraryfolders.vdf, their doubled backslashes made single.
     static func libraryPaths(in text: String) -> [String] {
         text.matches(of: #/"path"\s+"([^"]*)"/#).map { String($0.1).replacingOccurrences(of: "\\\\", with: "\\") }

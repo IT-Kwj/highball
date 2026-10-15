@@ -87,18 +87,19 @@ final class BundledEngineTests: XCTestCase {
         }
         XCTAssertEqual(try one("x64-crossover26.3-r20").components["wine"]?.sha256, try one("x64-crossover26.3-r21").components["wine"]?.sha256,
                        "one Wine build behind both, downloaded once")
-        // Every older plain Wine 11 pin is offered the newest plain revision on macOS 27 (r23 since the audio
-        // library joined, below), never a D3DMetal 4 one.
-        for pin in ["x64-crossover26.3-r5", "x64-crossover26.3-r7", "x64-crossover26.3-r8", "x64-crossover26.3-r9", "x64-crossover26.3-r15", "x64-crossover26.3-r19"] {
+        // Every older plain Wine 11 pin is offered the newest plain revision on macOS 27 (r27 since
+        // D3DMetal 4.0 beta 3 came in r26, below), never a D3DMetal 4 one.
+        for pin in ["x64-crossover26.3-r5", "x64-crossover26.3-r7", "x64-crossover26.3-r8", "x64-crossover26.3-r9", "x64-crossover26.3-r15", "x64-crossover26.3-r19",
+                    "x64-crossover26.3-r21", "x64-crossover26.3-r23", "x64-crossover26.3-r25"] {
             let wanted = try one(pin)
             let offered = all.filter { EngineManifest.satisfies(current: $0, wanted: wanted) && $0.runs(onMacOS: "27.0") }
                 .max { (EngineManifest.revision(of: $0.id) ?? 0) < (EngineManifest.revision(of: $1.id) ?? 0) }
-            XCTAssertEqual(offered?.id, "x64-crossover26.3-r23", "a pin on \(pin) must get the newest D3DMetal 3 revision")
+            XCTAssertEqual(offered?.id, "x64-crossover26.3-r27", "a pin on \(pin) must get the newest D3DMetal 3 revision")
         }
         let forzaPin = try one("x64-crossover26.3-r18")
         let forOffer = all.filter { EngineManifest.satisfies(current: $0, wanted: forzaPin) && $0.runs(onMacOS: "27.0") }
             .max { (EngineManifest.revision(of: $0.id) ?? 0) < (EngineManifest.revision(of: $1.id) ?? 0) }
-        XCTAssertEqual(forOffer?.id, "x64-crossover26.3-r22", "Forza Horizon 6's pin gets the newest D3DMetal 4 revision")
+        XCTAssertEqual(forOffer?.id, "x64-crossover26.3-r26", "Forza Horizon 6's pin gets the newest D3DMetal 4 revision")
         XCTAssertFalse(EngineManifest.satisfies(current: try one("x64-crossover26.3-r21"), wanted: forzaPin), "r21 lacks D3DMetal 4")
     }
 
@@ -123,6 +124,70 @@ final class BundledEngineTests: XCTestCase {
             XCTAssertFalse(EngineManifest.needsPrefixRefresh(from: o, to: n), "same Wine: moving over skips the Windows setup")
         }
         XCTAssertFalse(EngineManifest.satisfies(current: try one("x64-crossover26.3-r23"), wanted: try one("x64-crossover26.3-r18")), "r23 lacks D3DMetal 4")
+    }
+
+    /// r25 is r23 and r24 is r22 with three components rebuilt: Wine with patches 0022 to 0024 (Tx's spatial
+    /// audio fold-down for Forza Horizon 6, highball#313, and the app package lookups Forza Horizon 4 waits
+    /// on), the D3DMetal shim with its opt-in 64-bit atomics answer (Capcom's RE Engine), and MoltenVK with
+    /// the shadow readback the Wine 10 engines have had since their r24 (highball#283). Numbered like r23 and
+    /// r22, the D3DMetal 4 one below.
+    func testR25AndR24AreR23AndR22WithTheNewWineShimAndMoltenVK() throws {
+        let all = try manifests()
+        func one(_ id: String) throws -> EngineManifest { try XCTUnwrap(all.first { $0.id == id }, "\(id) missing") }
+        let rebuilt: Set<String> = ["wine", "d3dmetal-tsshim", "moltenvk"]
+        for (new, old) in [("x64-crossover26.3-r25", "x64-crossover26.3-r23"), ("x64-crossover26.3-r24", "x64-crossover26.3-r22")] {
+            let n = try one(new), o = try one(old)
+            XCTAssertEqual(Set(n.components.keys), Set(o.components.keys), "\(new) has \(old)'s components")
+            for (name, c) in o.components {
+                if rebuilt.contains(name) {
+                    XCTAssertNotEqual(n.components[name]?.sha256, c.sha256, "\(new)/\(name) is rebuilt")
+                    XCTAssertEqual(n.components[name]?.extract?.into, c.extract?.into, "\(new)/\(name) unpacks where \(old)'s did")
+                } else {
+                    XCTAssertEqual(n.components[name]?.sha256, c.sha256, "\(new)/\(name) must be \(old)'s")
+                }
+            }
+            XCTAssertEqual(n.minMacOS, o.minMacOS)
+            XCTAssertEqual(n.baseEnv, o.baseEnv)
+            XCTAssertTrue(EngineManifest.needsPrefixRefresh(from: o, to: n), "a new Wine: moving over runs the Windows setup")
+        }
+        for name in rebuilt {
+            XCTAssertEqual(try one("x64-crossover26.3-r24").components[name]?.sha256, try one("x64-crossover26.3-r25").components[name]?.sha256,
+                           "one \(name) archive behind both, downloaded once")
+        }
+        let readback = try XCTUnwrap(try one("x64-crossover26.3-r25").components["moltenvk"])
+        XCTAssertTrue(readback.url.absoluteString.hasSuffix("moltenvk-1.4.2-shadow-import-1-linear-fallback-1-shadow-readback-1-x86_64.tar.gz"))
+        XCTAssertFalse(EngineManifest.satisfies(current: try one("x64-crossover26.3-r25"), wanted: try one("x64-crossover26.3-r18")), "r25 lacks D3DMetal 4")
+    }
+
+    /// r26 is r24 with Apple's D3DMetal from Game Porting Toolkit 4.0 beta 3 (D3D12GetInterface and a
+    /// d3d12core.dll for the Agility SDK, shader model 6.7) and the shim built for it, whose exports follow
+    /// beta 3's ordinals. r27 is r25 under a new number, every archive the same, so plain pins keep landing
+    /// on a D3DMetal 3 revision above the D3DMetal 4 one.
+    func testR26IsR24WithD3DMetal4Beta3AndR27IsR25Renumbered() throws {
+        let all = try manifests()
+        func one(_ id: String) throws -> EngineManifest { try XCTUnwrap(all.first { $0.id == id }, "\(id) missing") }
+        let r24 = try one("x64-crossover26.3-r24"), r25 = try one("x64-crossover26.3-r25")
+        let r26 = try one("x64-crossover26.3-r26"), r27 = try one("x64-crossover26.3-r27")
+        XCTAssertEqual(Set(r26.components.keys), Set(r24.components.keys))
+        for (name, c) in r24.components {
+            if name == "d3dmetal" || name == "d3dmetal-tsshim" {
+                XCTAssertNotEqual(r26.components[name]?.sha256, c.sha256, "r26/\(name) is new")
+                XCTAssertEqual(r26.components[name]?.extract?.into, c.extract?.into, "r26/\(name) unpacks where r24's did")
+            } else {
+                XCTAssertEqual(r26.components[name]?.sha256, c.sha256, "r26/\(name) must be r24's")
+            }
+        }
+        XCTAssertTrue(r26.components["d3dmetal"]?.url.absoluteString.hasSuffix("d3dmetal-4.0b3-gptk4.tar.xz") == true)
+        XCTAssertEqual(r26.components["d3dmetal"]?.license, r24.components["d3dmetal"]?.license, "the same Apple licence text")
+        XCTAssertEqual(r26.minMacOS, "27.0")
+        XCTAssertEqual(r26.baseEnv, r24.baseEnv, "D3DM_MTL4=0 stays")
+        XCTAssertFalse(EngineManifest.needsPrefixRefresh(from: r24, to: r26), "same Wine: moving over skips the Windows setup")
+        XCTAssertEqual(Set(r27.components.keys), Set(r25.components.keys))
+        for (name, c) in r25.components { XCTAssertEqual(r27.components[name]?.sha256, c.sha256, "r27/\(name) must be r25's") }
+        XCTAssertEqual(r27.minMacOS, r25.minMacOS)
+        XCTAssertEqual(r27.baseEnv, r25.baseEnv)
+        XCTAssertFalse(EngineManifest.needsPrefixRefresh(from: r25, to: r27))
+        XCTAssertFalse(EngineManifest.satisfies(current: r27, wanted: try one("x64-crossover26.3-r18")), "r27 lacks D3DMetal 4")
     }
 
     /// Frame generation left Highball on 2026-09-27 at its author's request (itsOwen's lsfg-metal,

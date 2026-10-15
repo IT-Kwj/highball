@@ -311,6 +311,14 @@ static void STDMETHODCALLTYPE hook_CreateDepthStencilView(ID3D12Device *dev, ID3
 // against a newer SDK takes as "no usable shader model": Forza Horizon 6's 461.691 build asks with
 // 0x6a and stopped at "Your graphics card is not supported (FH206)" (M4, macOS 27.0, D3DMetal 4.0b2).
 // The Windows runtime the game ships knows its own enum, so on Windows the question never fails.
+//
+// OPTIONS11, 64-bit atomics on descriptor heap resources: D3DMetal 3 answers no on an M1 Pro, and
+// Capcom's RE Engine then refuses the adapter ("unsupported graphics card", the Onimusha: Way of
+// the Sword demo, highball-db#450, and Kunitsu-Gami). A player who patched D3DMetal to answer yes
+// ran the Onimusha demo through its benchmark at 32 fps, so the game does not need the feature to
+// draw. HB_TSSHIM_ATOMIC64=1, set only by such a game's fix, makes the shim answer yes; nothing
+// else changes, and without the variable the answer is D3DMetal's.
+static int claim_atomic64;
 static HRESULT (STDMETHODCALLTYPE *real_CheckFeatureSupport)(ID3D12Device *, D3D12_FEATURE, void *, UINT);
 static HRESULT STDMETHODCALLTYPE hook_CheckFeatureSupport(ID3D12Device *dev, D3D12_FEATURE feature, void *data, UINT size)
 {
@@ -324,6 +332,11 @@ static HRESULT STDMETHODCALLTYPE hook_CheckFeatureSupport(ID3D12Device *dev, D3D
         }
         if (FAILED(hr)) sm->HighestShaderModel = asked;
         LOG("shader model query for 0x%x answered as 0x%x (hr 0x%08lx)", asked, (unsigned)sm->HighestShaderModel, (unsigned long)hr);
+    } else if (feature == D3D12_FEATURE_D3D12_OPTIONS11 && claim_atomic64 && SUCCEEDED(hr) && data
+               && size >= sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS11)) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS11 *o = data;
+        if (!o->AtomicInt64OnDescriptorHeapResourceSupported) LOG("OPTIONS11: answering yes to 64-bit atomics on descriptor heap resources (HB_TSSHIM_ATOMIC64)");
+        o->AtomicInt64OnDescriptorHeapResourceSupported = TRUE;
     } else if (dbg) LOG("CheckFeatureSupport feature=%d size=%u hr=0x%08lx", (int)feature, size, (unsigned long)hr);
     return hr;
 }
@@ -466,6 +479,50 @@ HRESULT WINAPI D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL level, REF
     return hr;
 }
 
+// D3D12GetInterface, the Agility SDK entry point D3DMetal exports from 4.0 beta 3 (with a d3d12core.dll
+// beside it). A game can create its device through the ID3D12DeviceFactory it hands out instead of
+// D3D12CreateDevice, so a factory's CreateDevice is wrapped to patch those devices the same way. A
+// D3DMetal without the export (3.0, 4.0 beta 2) gets E_NOINTERFACE, which is what a game would see
+// from a Windows d3d12.dll that predates the Agility SDK.
+static HRESULT (STDMETHODCALLTYPE *real_FactoryCreateDevice)(ID3D12DeviceFactory *, IUnknown *, D3D_FEATURE_LEVEL, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_FactoryCreateDevice(ID3D12DeviceFactory *f, IUnknown *adapter, D3D_FEATURE_LEVEL level, REFIID riid, void **out)
+{
+    HRESULT hr = real_FactoryCreateDevice(f, adapter, level, riid, out);
+    if (SUCCEEDED(hr) && out && *out) {
+        ID3D12Device *dev = NULL; IUnknown *u = (IUnknown *)*out;
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12Device, (void **)&dev)) && dev) { patch_device(dev); dev->lpVtbl->Release(dev); }
+    }
+    return hr;
+}
+static void patch_factory_vtbl(void *iface)
+{
+    ID3D12DeviceFactoryVtbl *vt = *(ID3D12DeviceFactoryVtbl **)iface;
+    patch_slot((void **)&vt->CreateDevice, (void *)hook_FactoryCreateDevice, (void **)&real_FactoryCreateDevice);
+}
+
+HRESULT WINAPI D3D12GetInterface(REFCLSID clsid, REFIID riid, void **out)
+{
+    typedef HRESULT (WINAPI *PFN)(REFCLSID, REFIID, void **);
+    PFN fn = real_dll ? (PFN)GetProcAddress(real_dll, "D3D12GetInterface") : NULL;
+    HRESULT hr;
+    if (!fn) {
+        LOG("D3D12GetInterface asked of a D3DMetal without it");
+        if (out) *out = NULL;
+        return E_NOINTERFACE;
+    }
+    hr = fn(clsid, riid, out);
+    if (SUCCEEDED(hr) && out && *out && !idle) {
+        ID3D12DeviceFactory *factory = NULL; IUnknown *u = (IUnknown *)*out;
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12DeviceFactory, (void **)&factory)) && factory) {
+            patch_factory_vtbl(factory);
+            LOG("device factory %p patched", (void *)factory);
+            factory->lpVtbl->Release(factory);
+        }
+    }
+    if (dbg) LOG("D3D12GetInterface hr=0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     if (reason == DLL_PROCESS_ATTACH) {
@@ -477,6 +534,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         dbg = GetEnvironmentVariableA("HB_TSSHIM_DEBUG", NULL, 0) > 0;
         { char v[8]; idle = GetEnvironmentVariableA("HB_D3D12_TSSHIM", v, sizeof v) == 1 && v[0] == '0'; }   // kill switch
         { char v[8]; pass_depth_resolve = GetEnvironmentVariableA("HB_TSSHIM_DEPTHRESOLVE", v, sizeof v) == 1 && v[0] == '1'; }
+        { char v[8]; claim_atomic64 = GetEnvironmentVariableA("HB_TSSHIM_ATOMIC64", v, sizeof v) == 1 && v[0] == '1'; }
         if (!load_real()) return FALSE;
         RESOLVE(D3D12CoreCreateLayeredDevice); RESOLVE(D3D12CoreGetLayeredDeviceSize); RESOLVE(D3D12CoreRegisterLayers);
         RESOLVE(D3D12CreateRootSignatureDeserializer); RESOLVE(D3D12CreateVersionedRootSignatureDeserializer);

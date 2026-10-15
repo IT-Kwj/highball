@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import HighballKit
 import Observation
+import os
 
 /// The three Settings tabs, so a deep link can select one.
 enum SettingsTab: Hashable { case environments, engine, troubleshooting }
@@ -568,6 +569,17 @@ final class AppState {
         steamOwnedRefresh()
     }
 
+    @ObservationIgnored private var steamInstallSignatures: [String: String] = [:]
+
+    /// The client watch's backstop for the install watcher: a running Steam's install records
+    /// changed, so the installed games are read again whether or not the watcher heard it
+    /// (highball#286, a finished install whose page kept offering Install).
+    func steamInstallsMayHaveChanged(_ bottle: String, signature: String) {
+        guard steamInstallSignatures[bottle] != signature else { return }
+        steamInstallSignatures[bottle] = signature
+        refreshSteamInstalls()
+    }
+
     /// Hands an owned Steam game to its bottle's Steam, whose own dialog asks where to put it:
     /// a running client takes the steam:// URL; otherwise Steam starts as its pin does (with
     /// the sync its window needs) and receives it as an argument. Nothing is automated.
@@ -841,25 +853,34 @@ final class AppState {
     /// finishing in an open Steam window), so the library follows without a relaunch.
     @ObservationIgnored private var installWatcher: DirectoryWatcher?
 
-    /// The directories whose entries change when a game is installed or removed: Steam's
-    /// steamapps (appmanifest files) and the folder Epic installs land in.
+    /// The directories whose entries change when a game is installed or removed: the steamapps
+    /// of each Steam library folder (appmanifest files) and the folder Epic installs land in.
     private func installDirectories(of bottle: Bottle) -> [URL] {
-        var dirs = [bottle.driveC.appending(path: "Games")]
-        if let root = SteamLibrary.steamRoot(of: bottle) { dirs.append(root.appending(path: "steamapps")) }
-        return dirs
+        [bottle.driveC.appending(path: "Games")] + SteamLibrary.steamappsDirectories(of: bottle)
     }
 
     /// The cheap part of `refresh`: installed games only. Runs on every install-record change,
     /// so it must not spawn per call beyond legendary's install list, and never touches the
     /// directories it watches.
     func refreshInstalledGames() {
-        // Re-arm first: a steamapps that did not exist at the last full refresh (Steam was
-        // installed after launch) is only watched from here on, and a replaced one is reopened.
-        installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
+        refreshSteamInstalls()
         let mac = MacSteam.installedGames()
         if mac != macSteamGames { macSteamGames = mac; rebuildLibrary() }
+        refreshEpicInstalls()
+    }
+
+    /// The Windows Steam part of `refreshInstalledGames`, without legendary, so the client watch
+    /// can run it every few seconds of a long download for the price of a few directory reads.
+    func refreshSteamInstalls() {
+        // Re-arm first: a steamapps that did not exist at the last full refresh (Steam was
+        // installed after launch, or a library folder was added) is only watched from here on,
+        // and a replaced one is reopened.
+        installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         let games = Dictionary(bottles.map { ($0.name, SteamLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
         if games != gamesByBottle { gamesByBottle = games; rebuildLibrary() }
+    }
+
+    private func refreshEpicInstalls() {
         guard epicSignedIn, !epicFetchInFlight else { return }
         epicFetchInFlight = true
         Task.detached { [store = epicStore] in
@@ -1957,6 +1978,9 @@ final class AppState {
                     // The owned library fills in as the client loads it after sign-in (highball#199).
                     let signature = SteamOwnedLibrary.signature(steamRoot: root)
                     await MainActor.run { [self] in self.steamLibraryMayHaveChanged(bottle.name, signature: signature) }
+                    // An install starting or finishing where the directory watcher can't hear it (highball#286).
+                    let installs = SteamLibrary.installSignature(of: bottle)
+                    await MainActor.run { [self] in self.steamInstallsMayHaveChanged(bottle.name, signature: installs) }
                     // Steam can park a launch on a dialog nobody sees (issue #74).
                     if let waiting = SteamGameAction.pending(steamRoot: root) {
                         await MainActor.run { [self] in self.steamIsWaitingForAnAnswer(waiting, in: bottle) }
@@ -2637,22 +2661,41 @@ final class AppState {
         }
     }
 
+    /// The Epic install running now, for the strip's Stop and for quitting the app (highball#323).
+    @ObservationIgnored private var epicInstallControl: LegendaryControl?
+
     func epicInstall(_ game: EpicStore.Game, in bottle: Bottle) {
+        let control = LegendaryControl()
         runBusy("Installing \(game.app_title)", expected: L("a large download; you can leave it running"),
-                stop: .cancelTask(label: L("Stop"))) { [self] in
+                stop: .cancelTask(label: L("Stop")), cleanup: { [weak self] in self?.epicInstallControl = nil }) { [self] in
+            epicInstallControl = control
             let store = epicStore
             epicDownloadTotal = nil
-            let status = try await Task.detached {
-                try store.install(game.app_name, into: bottle) { line in
-                    Task { @MainActor in self.appendLog(line); self.reportEpicDownload(line) }
-                }
-            }.value
+            let refused = OSAllocatedUnfairLock(initialState: false)
+            // Stop cancels this task, and the cancellation reaches legendary as a Ctrl-C, which
+            // keeps the download's progress for the next Install.
+            let status = try await withTaskCancellationHandler {
+                try await Task.detached {
+                    try store.install(game.app_name, into: bottle, control: control) { line in
+                        if EpicStore.refusedForLock(line) { refused.withLock { $0 = true } }
+                        Task { @MainActor in self.appendLog(line); self.reportEpicDownload(line) }
+                    }
+                }.value
+            } onCancel: { control.stop() }
+            try Task.checkCancellation()
+            if refused.withLock({ $0 }) {
+                throw HighballError.failed(L("Another Epic download is still running, and legendary installs one game at a time. If Highball shows none, one started before Highball last quit is still going, so quit legendary in Activity Monitor and press Install again."))
+            }
             guard status == 0 else {
                 throw HighballError.processFailed(command: "epic install", status: status, output: "see the log above")
             }
             await MainActor.run { self.epicRefresh() }
         }
     }
+
+    /// Quitting the app stops an Epic download the way Stop does, so it never runs on alone,
+    /// holding legendary's install lock with nothing on screen to stop it (highball#323).
+    func stopEpicInstall() { epicInstallControl?.stop() }
 
     // renderer nil = the bottle's own renderer (the old hardcoded .dxvk default ignored it).
     /// `throughEpicLauncherStandIn`: a Rockstar game bought on Epic (its recipe requires the

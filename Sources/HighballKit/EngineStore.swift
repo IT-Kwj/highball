@@ -49,6 +49,7 @@ public struct EngineStore: Sendable {
             guard let m = try? EngineManifest.load(from: manifest) else { return nil }
             try? linkRuntime(dir)   // heals broken runtime links from pre-0.7.9 installs
             try? linkSignedLoader(dir, manifest: m)   // an app that moved repoints its arm64 engines
+            Self.removeAppleDoubleFiles(in: InstalledEngine(manifest: m, root: dir).gstreamerPluginDir, recursive: false)
             return InstalledEngine(manifest: m, root: dir)
         }.sorted { $0.manifest.id < $1.manifest.id }
     }
@@ -264,6 +265,7 @@ public struct EngineStore: Sendable {
         try saved.save(to: staging.appending(path: "manifest.json"))
         try linkRuntime(staging)
         try linkSignedLoader(staging, manifest: saved)
+        Self.removeAppleDoubleFiles(in: staging, recursive: true)
         // The unpacked tree must be a whole engine before it replaces anything: an archive that
         // unpacked short (a full disk, a file the archive lacks) used to install all the same and
         // fail every launch afterwards (highball#118). The archive was checksummed, so the fault
@@ -547,6 +549,8 @@ public struct InstalledEngine: Sendable {
     }
     public var engineDir: URL { root.appending(path: "engine", directoryHint: .isDirectory) }
     public var frameworksDir: URL { root.appending(path: "frameworks", directoryHint: .isDirectory) }
+    /// Where GStreamer looks for its plugins (GST_PLUGIN_PATH in baseEnvironment).
+    var gstreamerPluginDir: URL { frameworksDir.appending(path: "GStreamer.framework/Versions/1.0/lib/gstreamer-1.0", directoryHint: .isDirectory) }
     /// The library that keeps Wine's audio pulls under half a period (highball#127) and, since
     /// 20261008, limits a mix over full scale (highball-db#349), when the engine ships it as a
     /// component. Bottle.environment inserts it into Wine's processes.
@@ -653,7 +657,10 @@ public struct InstalledEngine: Sendable {
     /// in nine bytes: its internal export name, because Wine 10 tells builtin modules apart by file
     /// name but CrossOver's Wine 11 by that internal name, and with it untouched the copy came back
     /// as the shim itself (no DirectX 12 device at all, 2026-09-08). Idempotent, and redone when the
-    /// D3DMetal files change (an engine update replaces them).
+    /// D3DMetal files change. The copy is compared by content: D3DMetal 4.0 beta 2 and beta 3 ship
+    /// d3d12.dll at the same size, and a file unpacked from an archive keeps its build date, older
+    /// than a copy made earlier, so a size and date check kept beta 2's copy in front of beta 3 in an
+    /// engine whose D3DMetal was replaced in place (2026-10-15).
     public func timestampShimDir(d3dmetal: URL) -> URL? {
         guard let shim = rendererDir("d3dmetal-tsshim") else { return nil }
         let fm = FileManager.default
@@ -662,15 +669,10 @@ public struct InstalledEngine: Sendable {
         let pe = shim.appending(path: "wine/\(manifest.pe64LibDir)/\(Self.shimRealName).dll")
         let so = shim.appending(path: "wine/\(manifest.unixLibDir)/\(Self.shimRealName).so")
         do {
-            let realAttrs = try fm.attributesOfItem(atPath: realPE.path)
-            let current = (try? fm.attributesOfItem(atPath: pe.path))
-            let fresh = current != nil
-                && current?[.size] as? UInt64 == realAttrs[.size] as? UInt64
-                && ((current?[.modificationDate] as? Date) ?? .distantPast) >= ((realAttrs[.modificationDate] as? Date) ?? .distantPast)
-                && (try? PEExportName.read(Data(contentsOf: pe))) == "\(Self.shimRealName).dll"
-            if !fresh {
+            let wanted = try PEExportName.patched(Data(contentsOf: realPE), to: "\(Self.shimRealName).dll")
+            if (try? Data(contentsOf: pe)) != wanted {
                 try? fm.removeItem(at: pe)
-                try PEExportName.patched(Data(contentsOf: realPE), to: "\(Self.shimRealName).dll").write(to: pe)
+                try wanted.write(to: pe)
             }
             try fm.createDirectory(at: so.deletingLastPathComponent(), withIntermediateDirectories: true)
             if (try? fm.destinationOfSymbolicLink(atPath: so.path)) != realSO.path {
@@ -715,5 +717,50 @@ public struct InstalledEngine: Sendable {
                        .replacingOccurrences(of: "${renderers}", with: renderersDir.path)
         }
         return env
+    }
+}
+
+extension EngineStore {
+    /// macOS keeps a file's extended attributes in a `._name` file beside it on a volume with no
+    /// place for them (exFAT, FAT, SMB), so an engine unpacked onto such a drive gains one per
+    /// file. GStreamer takes every library in its plugin folder for a plugin and tried to load
+    /// the `._libgst*.dylib` files too (a player with Highball's home on a non-APFS drive, on
+    /// Discord, 2026-10-11). Removes each `._name` whose `name` sits beside it, nothing else, and
+    /// returns how many went. A fresh install is cleaned whole; an installed engine has its
+    /// plugin folder cleaned whenever engines are read, which also heals earlier installs.
+    @discardableResult
+    static func removeAppleDoubleFiles(in dir: URL, recursive: Bool) -> Int {
+        let fm = FileManager.default
+        var removed = 0
+        func clean(_ folder: URL) {
+            // readdir, not FileManager: Foundation's directory listing leaves `._` files out.
+            guard let names = rawNames(in: folder) else { return }
+            let present = Set(names)
+            for name in names where name.hasPrefix("._") && present.contains(String(name.dropFirst(2))) {
+                if (try? fm.removeItem(at: folder.appending(path: name))) != nil { removed += 1 }
+            }
+            guard recursive else { return }
+            for name in names where !name.hasPrefix("._") {
+                let child = folder.appending(path: name)
+                let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values?.isDirectory == true, values?.isSymbolicLink != true { clean(child) }
+            }
+        }
+        clean(dir)
+        return removed
+    }
+
+    /// Every entry of a directory as the file system lists it, `.` and `..` aside.
+    static func rawNames(in dir: URL) -> [String]? {
+        guard let handle = opendir(dir.path) else { return nil }
+        defer { closedir(handle) }
+        var names: [String] = []
+        while let entry = readdir(handle) {
+            let name = withUnsafePointer(to: entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names
     }
 }

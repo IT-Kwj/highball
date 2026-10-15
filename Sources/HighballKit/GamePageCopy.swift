@@ -79,6 +79,15 @@ public enum GamePageCopy {
             source: source)
     }
 
+    /// Steam lists a Mac version that is 32-bit, which no macOS since Catalina runs, so the page
+    /// offers the Windows version alone. Said once, so the missing Mac button is not a mystery
+    /// (udance4ever's suggestion on highball#316). A database row about the Mac version decides
+    /// instead, as it does for the Mac card.
+    public static func outdatedMacBuild(appInfo: MacAppInfoBuild?, entry: GameDBEntry?) -> String? {
+        guard appInfo == .only32Bit, entry?.nativeMac == nil else { return nil }
+        return "Steam also has a Mac version of this game, but it is 32-bit and macOS has not run those since Catalina, so Highball installs the Windows version."
+    }
+
     /// One line of "when you press Play, Highball will".
     public struct WillDo: Equatable {
         public var text: String

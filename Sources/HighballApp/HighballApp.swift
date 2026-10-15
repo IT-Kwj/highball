@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        appState?.stopEpicInstall()
         DiscordPresence.shared.setEnabled(false)
         DiscordPresence.shared.stop()
     }
