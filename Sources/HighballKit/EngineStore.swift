@@ -645,7 +645,10 @@ public struct InstalledEngine: Sendable {
     /// in nine bytes: its internal export name, because Wine 10 tells builtin modules apart by file
     /// name but CrossOver's Wine 11 by that internal name, and with it untouched the copy came back
     /// as the shim itself (no DirectX 12 device at all, 2026-09-08). Idempotent, and redone when the
-    /// D3DMetal files change (an engine update replaces them).
+    /// D3DMetal files change. The copy is compared by content: D3DMetal 4.0 beta 2 and beta 3 ship
+    /// d3d12.dll at the same size, and a file unpacked from an archive keeps its build date, older
+    /// than a copy made earlier, so a size and date check kept beta 2's copy in front of beta 3 in an
+    /// engine whose D3DMetal was replaced in place (2026-10-15).
     public func timestampShimDir(d3dmetal: URL) -> URL? {
         guard let shim = rendererDir("d3dmetal-tsshim") else { return nil }
         let fm = FileManager.default
@@ -654,15 +657,10 @@ public struct InstalledEngine: Sendable {
         let pe = shim.appending(path: "wine/\(manifest.pe64LibDir)/\(Self.shimRealName).dll")
         let so = shim.appending(path: "wine/\(manifest.unixLibDir)/\(Self.shimRealName).so")
         do {
-            let realAttrs = try fm.attributesOfItem(atPath: realPE.path)
-            let current = (try? fm.attributesOfItem(atPath: pe.path))
-            let fresh = current != nil
-                && current?[.size] as? UInt64 == realAttrs[.size] as? UInt64
-                && ((current?[.modificationDate] as? Date) ?? .distantPast) >= ((realAttrs[.modificationDate] as? Date) ?? .distantPast)
-                && (try? PEExportName.read(Data(contentsOf: pe))) == "\(Self.shimRealName).dll"
-            if !fresh {
+            let wanted = try PEExportName.patched(Data(contentsOf: realPE), to: "\(Self.shimRealName).dll")
+            if (try? Data(contentsOf: pe)) != wanted {
                 try? fm.removeItem(at: pe)
-                try PEExportName.patched(Data(contentsOf: realPE), to: "\(Self.shimRealName).dll").write(to: pe)
+                try wanted.write(to: pe)
             }
             try fm.createDirectory(at: so.deletingLastPathComponent(), withIntermediateDirectories: true)
             if (try? fm.destinationOfSymbolicLink(atPath: so.path)) != realSO.path {

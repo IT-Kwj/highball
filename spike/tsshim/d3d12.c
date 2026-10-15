@@ -479,6 +479,50 @@ HRESULT WINAPI D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL level, REF
     return hr;
 }
 
+// D3D12GetInterface, the Agility SDK entry point D3DMetal exports from 4.0 beta 3 (with a d3d12core.dll
+// beside it). A game can create its device through the ID3D12DeviceFactory it hands out instead of
+// D3D12CreateDevice, so a factory's CreateDevice is wrapped to patch those devices the same way. A
+// D3DMetal without the export (3.0, 4.0 beta 2) gets E_NOINTERFACE, which is what a game would see
+// from a Windows d3d12.dll that predates the Agility SDK.
+static HRESULT (STDMETHODCALLTYPE *real_FactoryCreateDevice)(ID3D12DeviceFactory *, IUnknown *, D3D_FEATURE_LEVEL, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_FactoryCreateDevice(ID3D12DeviceFactory *f, IUnknown *adapter, D3D_FEATURE_LEVEL level, REFIID riid, void **out)
+{
+    HRESULT hr = real_FactoryCreateDevice(f, adapter, level, riid, out);
+    if (SUCCEEDED(hr) && out && *out) {
+        ID3D12Device *dev = NULL; IUnknown *u = (IUnknown *)*out;
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12Device, (void **)&dev)) && dev) { patch_device(dev); dev->lpVtbl->Release(dev); }
+    }
+    return hr;
+}
+static void patch_factory_vtbl(void *iface)
+{
+    ID3D12DeviceFactoryVtbl *vt = *(ID3D12DeviceFactoryVtbl **)iface;
+    patch_slot((void **)&vt->CreateDevice, (void *)hook_FactoryCreateDevice, (void **)&real_FactoryCreateDevice);
+}
+
+HRESULT WINAPI D3D12GetInterface(REFCLSID clsid, REFIID riid, void **out)
+{
+    typedef HRESULT (WINAPI *PFN)(REFCLSID, REFIID, void **);
+    PFN fn = real_dll ? (PFN)GetProcAddress(real_dll, "D3D12GetInterface") : NULL;
+    HRESULT hr;
+    if (!fn) {
+        LOG("D3D12GetInterface asked of a D3DMetal without it");
+        if (out) *out = NULL;
+        return E_NOINTERFACE;
+    }
+    hr = fn(clsid, riid, out);
+    if (SUCCEEDED(hr) && out && *out && !idle) {
+        ID3D12DeviceFactory *factory = NULL; IUnknown *u = (IUnknown *)*out;
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12DeviceFactory, (void **)&factory)) && factory) {
+            patch_factory_vtbl(factory);
+            LOG("device factory %p patched", (void *)factory);
+            factory->lpVtbl->Release(factory);
+        }
+    }
+    if (dbg) LOG("D3D12GetInterface hr=0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     if (reason == DLL_PROCESS_ATTACH) {
