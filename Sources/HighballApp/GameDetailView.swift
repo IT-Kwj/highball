@@ -457,6 +457,24 @@ struct GameDetailView: View {
                                 }
                             }
                         }
+                        let stored = state.displayChoice(for: item) ?? ""
+                        let monitors = Monitor.connected()
+                        HStack(alignment: .top, spacing: 12) {
+                            Text(L("Display")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Picker("", selection: Binding(
+                                    get: { stored },
+                                    set: { state.setDisplay($0.isEmpty ? nil : $0, for: item) })) {
+                                    Text(L("Main display")).tag("")
+                                    ForEach(monitors) { monitor in Text(monitor.name).tag(monitor.id) }
+                                    if !stored.isEmpty, !monitors.contains(where: { $0.id == stored }) {
+                                        Text(L("Disconnected display")).tag(stored)
+                                    }
+                                }.labelsHidden().frame(maxWidth: 360)
+                                Text(L("Highball moves the game's window here after it opens. Works best for windowed and borderless games. Needs Accessibility permission for Highball."))
+                                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                         if item.source == .steam {
                             HStack(alignment: .top, spacing: 12) {
                                 Text(L("Launch arguments")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)

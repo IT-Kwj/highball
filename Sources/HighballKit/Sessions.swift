@@ -16,10 +16,11 @@ public struct GameSession: Identifiable, Sendable, Equatable {
     /// The row's start notice (GameDBEntry.startNotice) and how long it stays.
     public let startNotice: String?
     public let startNoticeMinutes: Int
+    public let libraryID: String?
     public init(id: UUID = UUID(), title: String, bottleName: String, appid: Int?, markers: [String], started: Date = Date(), renderer: String? = nil,
-                startNotice: String? = nil, startNoticeMinutes: Int? = nil) {
+                libraryID: String? = nil, startNotice: String? = nil, startNoticeMinutes: Int? = nil) {
         self.id = id; self.title = title; self.bottleName = bottleName; self.appid = appid; self.markers = markers; self.started = started
-        self.renderer = renderer
+        self.renderer = renderer; self.libraryID = libraryID
         self.startNotice = startNotice.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         self.startNoticeMinutes = startNoticeMinutes ?? 15
     }
