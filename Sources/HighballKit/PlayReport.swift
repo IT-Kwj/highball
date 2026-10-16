@@ -21,7 +21,9 @@ public enum PlayReport {
     public static let template = "report.yml"
 
     /// The issue URL for highball-db's report form, its fields prefilled by id. Query items use
-    /// the form's field ids, which GitHub reads into the matching inputs.
+    /// the form's field ids, which GitHub reads into the matching inputs. The session line goes to
+    /// the form's own Session field, not Notes, so the reporter's words in Notes stay theirs
+    /// (highball#347: a prefilled Notes snapped back to the line when edited).
     public static func url(title: String, appid: Int?, renderer: String?, chip: String, macos: String,
                            engine: String, minutes: Int, version: String? = nil, settings: String? = nil) -> URL {
         var comps = URLComponents(string: "https://github.com/gauthierpiarrette/highball-db/issues/new")!
@@ -34,7 +36,7 @@ public enum PlayReport {
         items += [URLQueryItem(name: "chip", value: chip),
                   URLQueryItem(name: "macos", value: macos),
                   URLQueryItem(name: "engine", value: engine),
-                  URLQueryItem(name: "notes", value: "Played for \(minutes) min through Highball.")]
+                  URLQueryItem(name: "session", value: "Played for \(minutes) min through Highball.")]
         comps.queryItems = items
         return comps.url!
     }

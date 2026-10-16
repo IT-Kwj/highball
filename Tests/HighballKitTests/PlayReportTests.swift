@@ -16,7 +16,8 @@ final class PlayReportTests: XCTestCase {
         XCTAssertEqual(q["chip"], "Apple M1 Pro")
         XCTAssertEqual(q["macos"], "26.6.2")
         XCTAssertEqual(q["engine"], "x64-sikarugir10.0_6-r1")
-        XCTAssertEqual(q["notes"], "Played for 23 min through Highball.")
+        XCTAssertEqual(q["session"], "Played for 23 min through Highball.")
+        XCTAssertNil(q["notes"], "Notes stays empty for the reporter's own words (highball#347)")
         XCTAssertEqual(q["version"], "0.9.6")
         XCTAssertNil(q["rating"], "the rating is the player's to give")
     }
