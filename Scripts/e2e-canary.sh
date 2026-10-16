@@ -40,11 +40,25 @@ for k, v in json.load(open(sys.argv[1]))["components"].items(): print(k, v["url"
 
 manifest_sweep spike/engine-manifest.json repo
 
+# Stapler asks Apple's ticket service during validation, and a dropped connection there is
+# the runner's network, not a change in what users get (2026-10-16, run 38902676539: NSURLError
+# -1005 on the zip app, every manifest row ok). Such a failure counts as availability.
+staple_check() {  # staple_check <path> <what>
+  local out
+  if out=$(xcrun stapler validate "$1" 2>&1); then return 0; fi
+  echo "$out" | tail -3
+  if echo "$out" | grep -q -E "NSURLErrorDomain|network connection was lost|could not be reached|timed out"; then
+    echo "AVAILABILITY: $2 stapler validation could not reach Apple"; AVAIL=1
+  else
+    echo "DRIFT: $2 stapler validation failed"; DRIFT=1
+  fi
+}
+
 G=$(mktemp -d); trap 'rm -rf "$G"' EXIT
 
 echo "--- published DMG (the download every new user gets)"
 if curl -fsSL --retry 3 --max-time 900 -o "$G/app.dmg" "https://github.com/$REPO/releases/latest/download/Highball.dmg"; then
-  xcrun stapler validate "$G/app.dmg" || { echo "DRIFT: DMG stapler validation failed"; DRIFT=1; }
+  staple_check "$G/app.dmg" "DMG"
   spctl --assess --type open --context context:primary-signature "$G/app.dmg" || { echo "DRIFT: DMG spctl assessment failed"; DRIFT=1; }
 else
   echo "AVAILABILITY: latest DMG unreachable"; AVAIL=1
@@ -83,7 +97,7 @@ if [ -n "$TAG" ]; then
     # ditto, never unzip: unzip flattens Sparkle's symlinks and manufactures a
     # codesign failure (the proven 2026-08-25 Gatekeeper incident).
     ditto -x -k "$G/app.zip" "$G/x"
-    xcrun stapler validate "$G/x/Highball.app" || { echo "DRIFT: zip app stapler validation failed"; DRIFT=1; }
+    staple_check "$G/x/Highball.app" "zip app"
     spctl --assess --type execute "$G/x/Highball.app" || { echo "DRIFT: zip app spctl assessment failed"; DRIFT=1; }
     if [ -f "$G/x/Highball.app/Contents/Resources/engine-manifest.json" ]; then
       manifest_sweep "$G/x/Highball.app/Contents/Resources/engine-manifest.json" "released-bundle-$TAG"
