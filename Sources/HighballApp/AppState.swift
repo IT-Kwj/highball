@@ -154,6 +154,17 @@ final class AppState {
         libraryLaunchArgs = libraryStore.launchArguments()
         appendLog(args.isEmpty ? "\(item.id): launch arguments cleared" : "\(item.id): launch arguments set to \(ArgumentLine.join(args))")
     }
+    /// The display (CoreGraphics UUID) a game's window moves to, by library id.
+    var libraryDisplays: [String: String] = [:]
+    func displayChoice(for item: LibraryItem) -> String? { libraryDisplays[item.id] }
+    func setDisplay(_ uuid: String?, for item: LibraryItem) {
+        guard uuid != displayChoice(for: item) else { return }
+        if uuid != nil { _ = WindowMover.ensureTrusted(prompt: true) }
+        libraryStore.setDisplay(uuid, for: item.id)
+        libraryDisplays = libraryStore.displayChoices()
+        let name = uuid.flatMap { u in Monitor.connected().first { $0.id == u }?.name }
+        appendLog(uuid == nil ? "\(item.id): display back to the main one" : "\(item.id): display set to \(name ?? "a disconnected display")")
+    }
     func setRendererOverride(_ renderer: Renderer?, for id: String) {
         libraryStore.setRendererOverride(renderer, for: id)
         libraryOverrides = libraryStore.rendererOverrides()
@@ -933,6 +944,7 @@ final class AppState {
         libraryPlays = libraryStore.load()
         libraryOverrides = libraryStore.rendererOverrides()
         libraryLaunchArgs = libraryStore.launchArguments()
+        libraryDisplays = libraryStore.displayChoices()
         rebuildLibrary()
         steamOwnedRefresh()
         epicRefresh()
@@ -2093,6 +2105,7 @@ final class AppState {
         runningSessions.append(session)
         appendLog("\(session.title) is running")
         bringForwardWhenItDraws(session)
+        moveToChosenDisplay(session)
         if !FunnelLog.records(in: paths.logs).contains(where: { $0.event == .firstGameProcess }) { funnel(.firstGameProcess) }
         sessionWatchers[session.id] = Task.detached { [weak self] in
             if let prefix = await self?.discordEnvironmentPrefix(for: session),
@@ -2141,6 +2154,39 @@ final class AppState {
                 let done = game.activate(from: .current, options: [])
                 self.appendLog(done ? "brought \(session.title) to the front" : "macOS kept \(session.title) behind")
                 return
+            }
+        }
+    }
+
+    /// Moves the game's windows onto the display the player chose on its page (Accessibility API;
+    /// Wine's Mac driver always opens on the main display). Checks once a second for two minutes,
+    /// moving each window once so one the player drags afterwards stays put.
+    private func moveToChosenDisplay(_ session: GameSession) {
+        guard let id = session.libraryID, let uuid = libraryDisplays[id],
+              let prefix = bottles.first(where: { $0.name == session.bottleName })?.url else { return }
+        guard WindowMover.ensureTrusted(prompt: false) else {
+            appendLog("\(session.title): moving to a display needs Accessibility permission for Highball (System Settings > Privacy & Security > Accessibility)")
+            return
+        }
+        // Off the main actor: AX calls can block while the game loads. Only the checks hop back.
+        Task.detached { [weak self] in
+            var handled: [AXUIElement] = []
+            for _ in 0..<120 {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                let state = await MainActor.run { () -> (running: Bool, monitor: Monitor?) in
+                    (self.runningSessions.contains(session), Monitor.connected().first(where: { $0.id == uuid }))
+                }
+                guard state.running else { return }
+                guard let monitor = state.monitor else {
+                    await self.appendLog("\(session.title): chosen display is not connected, leaving the window where it opened")
+                    return
+                }
+                for pid in SessionWatch.pids(ofPrefix: prefix, markers: session.markers) {
+                    for _ in 0..<WindowMover.move(pid: pid, to: monitor.bounds, alreadyMoved: &handled) {
+                        await self.appendLog("moved \(session.title) to \(monitor.name)")
+                    }
+                }
             }
         }
     }
@@ -2304,7 +2350,8 @@ final class AppState {
                 steamClients.insert(bottle.name)   // the poll would take up to 8 s to notice
             } else {
                 beginSession(GameSession(title: pin.name, bottleName: bottle.name, appid: nil, markers: markers,
-                                         renderer: (pin.renderer ?? bottle.settings.renderer).rawValue), processList: box.processList)
+                                         renderer: (pin.renderer ?? bottle.settings.renderer).rawValue,
+                                         libraryID: "pin:\(bottle.name):\(pin.id.uuidString)"), processList: box.processList)
             }
         }
     }
@@ -2469,7 +2516,7 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.name, bottleName: bottle.name, appid: game.appid, markers: markers,
-                                     renderer: servedRenderer.rawValue, startNotice: entry?.startNotice,
+                                     renderer: servedRenderer.rawValue, libraryID: "steam:\(game.appid)", startNotice: entry?.startNotice,
                                      startNoticeMinutes: entry?.startNoticeMinutes), processList: box.processList)
         }
     }
@@ -2749,8 +2796,8 @@ final class AppState {
             }
             guard handedOff else { return }
             beginSession(GameSession(title: game.app_title, bottleName: bottle.name, appid: nil, markers: markers,
-                                     renderer: (renderer ?? bottle.settings.renderer).rawValue, startNotice: row?.startNotice,
-                                     startNoticeMinutes: row?.startNoticeMinutes), processList: box.processList)
+                                     renderer: (renderer ?? bottle.settings.renderer).rawValue, libraryID: "epic:\(game.app_name)",
+                                     startNotice: row?.startNotice, startNoticeMinutes: row?.startNoticeMinutes), processList: box.processList)
         }
     }
 

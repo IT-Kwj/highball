@@ -261,6 +261,9 @@ public struct LibraryStore: Sendable {
         /// database adds (highball#236: the only ways were Steam's own Launch Options or a program
         /// entry). Optional so older files still decode.
         var launchArgs: [String: [String]]?
+        /// The display one game's window is moved to after it opens, by library id (display UUID
+        /// string). Optional so older files still decode.
+        var displays: [String: String]?
     }
 
     public let paths: HighballPaths
@@ -299,6 +302,18 @@ public struct LibraryStore: Sendable {
         if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
     }
 
+    public func displayChoices() -> [String: String] { loadShape().displays ?? [:] }
+
+    /// Sets, or with nil clears, the display (CoreGraphics UUID string) one game's window moves to.
+    public func setDisplay(_ uuid: String?, for id: String) {
+        var shape = loadShape()
+        var all = shape.displays ?? [:]
+        all[id] = uuid
+        shape.displays = all.isEmpty ? nil : all
+        try? paths.ensure()
+        if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
     private func loadShape() -> FileShape {
         guard let data = try? Data(contentsOf: fileURL),
               let shape = try? JSONDecoder.highball.decode(FileShape.self, from: data) else { return FileShape() }
@@ -316,13 +331,20 @@ public struct LibraryStore: Sendable {
 
     /// Drops records whose items no longer exist (uninstalled games, deleted pins).
     public func prune(validIDs: Set<String>) {
-        let whole = loadShape()
-        let current = whole.items
-        let kept = current.filter { validIDs.contains($0.key) }
+        var whole = loadShape()
+        let keptItems = whole.items.filter { validIDs.contains($0.key) }
         let keptOverrides = (whole.overrides ?? [:]).filter { validIDs.contains($0.key) }
-        guard kept.count != current.count || keptOverrides.count != (whole.overrides ?? [:]).count else { return }
-        let shape = FileShape(items: kept, overrides: keptOverrides.isEmpty ? nil : keptOverrides)
-        if let data = try? JSONEncoder.highball.encode(shape) {
+        let keptArgs = (whole.launchArgs ?? [:]).filter { validIDs.contains($0.key) }
+        let keptDisplays = (whole.displays ?? [:]).filter { validIDs.contains($0.key) }
+        guard keptItems.count != whole.items.count
+                || keptOverrides.count != (whole.overrides ?? [:]).count
+                || keptArgs.count != (whole.launchArgs ?? [:]).count
+                || keptDisplays.count != (whole.displays ?? [:]).count else { return }
+        whole.items = keptItems
+        whole.overrides = keptOverrides.isEmpty ? nil : keptOverrides
+        whole.launchArgs = keptArgs.isEmpty ? nil : keptArgs
+        whole.displays = keptDisplays.isEmpty ? nil : keptDisplays
+        if let data = try? JSONEncoder.highball.encode(whole) {
             try? data.write(to: fileURL, options: .atomic)
         }
     }
