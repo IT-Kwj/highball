@@ -5,6 +5,14 @@
     <link>https://github.com/gauthierpiarrette/highball</link>
     <description>Run Windows games on Apple Silicon.</description>
     <item>
+      <title>Highball 0.10.17</title>
+      <description><![CDATA[Games can open on the display you pick (thanks to @tuandinh0801, highball#360), and macOS Game Mode now engages for Wine games, so a full-screen game gets the highest priority on the CPU and GPU as native games do (thanks to @dtacci, highball#339). Also new Wine 11 engines r26 and r27 with Apple's D3DMetal from Game Porting Toolkit 4.0 beta 3, and the vkd3d mode keeps its shader pipeline cache between starts.]]></description>
+      <pubDate>Sat, 17 Oct 2026 23:04:45 +0200</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>beta</sparkle:channel>
+      <enclosure url="https://github.com/gauthierpiarrette/highball/releases/download/v0.10.17/Highball-0.10.17.zip" sparkle:version="0.10.17" sparkle:shortVersionString="0.10.17" sparkle:edSignature="XBEK5CFg6Hk7HPs9xjbLIuY0qgymbT0foofHj0fiCuby+VWasFoYoU/FLca1vIti++2yPauWzFXj9HXeazaECQ==" length="5252980" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Highball 0.10.16</title>
       <description><![CDATA[<p>Forza Horizon 6's dialogue and engine sound are back on Mac speakers and headphones, and Red Dead Redemption 2 no longer stops with Rockstar launcher error 113. Thanks to @TxCsOffc for the Forza fix and to crêpe on Discord for the Red Dead one.</p><ul><li>For Forza Horizon 6, pick engine r24 in its environment's settings under Advanced, Engine. Other Wine 11 environments can pick r25.</li><li>A Steam install that finishes while its page is open turns its button into Play, and Stop really stops an Epic download.</li></ul>]]></description>
       <pubDate>Wed, 14 Oct 2026 14:07:59 +0200</pubDate>
