@@ -208,6 +208,7 @@ final class BundledEngineTests: XCTestCase {
     /// reach it under MVK_SHADOW_IMPORT=1 (The Sims' thumbnails, highball#283): r24 and r25.
     /// On 2026-10-08 the audio library gains a limiter, so a game whose float mix goes over full scale
     /// is turned down instead of clipped (highball-db#349): r26 and r27.
+    /// On 2026-10-18 DXMT gains Steep's sample count fallback (highball-db#465): r28 and r29.
     /// Everything else is byte-identical, so it is not downloaded again, and every new archive
     /// comes from Highball's own release pages (a component URL has to be ours to stay immutable,
     /// #27/#28).
@@ -224,13 +225,15 @@ final class BundledEngineTests: XCTestCase {
                                   ("x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r5"), ("x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r5"),
                                   ("x64-sikarugir10.0_6-r20", "x64-sikarugir10.0_6-r6"), ("x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r6"),
                                   ("x64-sikarugir10.0_6-r25", "x64-sikarugir10.0_6-r6"), ("x64-sikarugir10.0_6-r26", "x64-sikarugir10.0_6-r5"),
-                                  ("x64-sikarugir10.0_6-r27", "x64-sikarugir10.0_6-r6")] {
+                                  ("x64-sikarugir10.0_6-r27", "x64-sikarugir10.0_6-r6"), ("x64-sikarugir10.0_6-r28", "x64-sikarugir10.0_6-r5"),
+                                  ("x64-sikarugir10.0_6-r29", "x64-sikarugir10.0_6-r6")] {
             let r = try one(current), base = try one(baseID)
             XCTAssertEqual(r.minMacOS, base.minMacOS, "\(current) must keep \(baseID)'s floor")
             XCTAssertEqual(r.baseEnv?["D3DM_MTL4"], base.baseEnv?["D3DM_MTL4"], "\(current) must keep \(baseID)'s Metal 4 setting")
             XCTAssertEqual(Set(r.components.keys), Set(base.components.keys).union(["winemac", "wineserver", "ntdll-unix", "audiobuf"]),
                            "\(current) has exactly \(baseID)'s components plus the driver, the msync fix and the audio library")
-            let readback: Set = ["x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r25", "x64-sikarugir10.0_6-r26", "x64-sikarugir10.0_6-r27"]
+            let readback: Set = ["x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r25", "x64-sikarugir10.0_6-r26", "x64-sikarugir10.0_6-r27",
+                                 "x64-sikarugir10.0_6-r28", "x64-sikarugir10.0_6-r29"]
             for (name, component) in base.components where name != "dxmt" && !(name == "moltenvk" && readback.contains(current)) {
                 XCTAssertEqual(r.components[name]?.sha256, component.sha256, "\(name) drifted from \(baseID), so its download is not reused")
             }
@@ -253,7 +256,8 @@ final class BundledEngineTests: XCTestCase {
             // The msync fix is byte edits to the same archive's wineserver and ntdll.so
             // (Scripts/build-wine10-msync.sh), one archive behind two single-file components. r21's
             // archive (Scripts/build-wine10-dep.sh) carries those edits plus the DEP one.
-            let archive = ["x64-sikarugir10.0_6-r21", "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r26"].contains(current) ? "wine10-dep-" : "wine10-msync-"
+            let archive = ["x64-sikarugir10.0_6-r21", "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r26",
+                           "x64-sikarugir10.0_6-r28"].contains(current) ? "wine10-dep-" : "wine10-msync-"
             for (name, into) in [("wineserver", "engine/bin/wineserver"), ("ntdll-unix", "engine/lib/wine/x86_64-unix/ntdll.so")] {
                 let c = try XCTUnwrap(r.components[name])
                 XCTAssertEqual(c.extract?.into, into, "\(current)/\(name) replaces one file, the Wine archive's own")
@@ -271,7 +275,7 @@ final class BundledEngineTests: XCTestCase {
             XCTAssertTrue(audio.url.absoluteString.hasPrefix("https://github.com/gauthierpiarrette/highball-engine/releases/download/audiobuf-"),
                           "\(current)'s audio library must come from Highball's own release page: \(audio.url)")
         }
-        XCTAssertEqual(all.last?.id, "x64-sikarugir10.0_6-r26", "r26 is the default engine")
+        XCTAssertEqual(all.last?.id, "x64-sikarugir10.0_6-r28", "r28 is the default engine")
         // r22 and r23 are r21 and r20 with only the driver changed: the retina fix rides one new
         // archive, and every other download is reused.
         for (fixed, before) in [("x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r21"), ("x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r20")] {
@@ -321,25 +325,46 @@ final class BundledEngineTests: XCTestCase {
         }
         XCTAssertEqual(try one("x64-sikarugir10.0_6-r26").components["audiobuf"]?.sha256, try one("x64-sikarugir10.0_6-r27").components["audiobuf"]?.sha256,
                        "one audio library archive behind both lines, downloaded once")
+        // r28 and r29 are r26 and r27 with only DXMT changed: Highball's DXMT branch plus Steep's sample
+        // count fallback (highball-db#465), one archive for both lines, every other download reused.
+        for (fixed, before) in [("x64-sikarugir10.0_6-r28", "x64-sikarugir10.0_6-r26"), ("x64-sikarugir10.0_6-r29", "x64-sikarugir10.0_6-r27")] {
+            let r = try one(fixed), b = try one(before)
+            let dxmt = try XCTUnwrap(r.components["dxmt"])
+            XCTAssertTrue(dxmt.url.absoluteString.contains("-331c552/"), "\(fixed) carries the DXMT build with Steep's fix: \(dxmt.url)")
+            XCTAssertNotEqual(dxmt.sha256, b.components["dxmt"]?.sha256, "\(fixed) must not carry \(before)'s DXMT")
+            XCTAssertEqual(dxmt.extract?.into, b.components["dxmt"]?.extract?.into, "it lands where the DXMT it replaces did")
+            XCTAssertEqual(dxmt.extract?.subpath, b.components["dxmt"]?.extract?.subpath)
+            XCTAssertEqual(Set(r.components.keys), Set(b.components.keys))
+            for (name, c) in b.components where name != "dxmt" {
+                XCTAssertEqual(r.components[name]?.sha256, c.sha256, "\(fixed)/\(name) must be \(before)'s, only DXMT changes")
+            }
+            XCTAssertEqual(r.minMacOS, b.minMacOS)
+            XCTAssertEqual(r.baseEnv, b.baseEnv)
+            XCTAssertFalse(EngineManifest.needsPrefixRefresh(from: b, to: r), "\(fixed) keeps the Wine archive, so environments move without the Windows setup")
+        }
+        XCTAssertEqual(try one("x64-sikarugir10.0_6-r28").components["dxmt"]?.sha256, try one("x64-sikarugir10.0_6-r29").components["dxmt"]?.sha256,
+                       "one DXMT archive behind both lines, downloaded once")
         // The update to r21 moves r17 and r19 environments straight over, and leaves GPTK 4 ones (r18)
         // for their own line's r20, which is where the walk must send them.
         let shipped = Set(all.flatMap { $0.components.keys })
-        for from in ["x64-sikarugir10.0_6-r17", "x64-sikarugir10.0_6-r19", "x64-sikarugir10.0_6-r21", "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24"] {
-            XCTAssertTrue(EngineStore.canMoveBottle(on: try one(from), to: try one("x64-sikarugir10.0_6-r26"), shipped: shipped), "\(from) moves to r26")
+        for from in ["x64-sikarugir10.0_6-r17", "x64-sikarugir10.0_6-r19", "x64-sikarugir10.0_6-r21", "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24",
+                     "x64-sikarugir10.0_6-r26"] {
+            XCTAssertTrue(EngineStore.canMoveBottle(on: try one(from), to: try one("x64-sikarugir10.0_6-r28"), shipped: shipped), "\(from) moves to r28")
         }
-        XCTAssertFalse(EngineStore.canMoveBottle(on: try one("x64-sikarugir10.0_6-r18"), to: try one("x64-sikarugir10.0_6-r26"), shipped: shipped))
-        for gptk4 in ["x64-sikarugir10.0_6-r18", "x64-sikarugir10.0_6-r20", "x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r25"] {
+        XCTAssertFalse(EngineStore.canMoveBottle(on: try one("x64-sikarugir10.0_6-r18"), to: try one("x64-sikarugir10.0_6-r28"), shipped: shipped))
+        for gptk4 in ["x64-sikarugir10.0_6-r18", "x64-sikarugir10.0_6-r20", "x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r25", "x64-sikarugir10.0_6-r27"] {
             XCTAssertEqual(EngineStore.successor(for: try one(gptk4), among: all, shipped: shipped, macOS: "27.0")?.id,
-                           "x64-sikarugir10.0_6-r27", "\(gptk4) environments stay on the D3DMetal 4 line and get its fixes")
+                           "x64-sikarugir10.0_6-r29", "\(gptk4) environments stay on the D3DMetal 4 line and get its fixes")
         }
-        // r27 is numbered above r26, but a default-line environment left behind still takes r26: the walk
+        // r29 is numbered above r28, but a default-line environment left behind still takes r28: the walk
         // prefers the variant adding no component over the newest.
-        for left in ["x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24"] {
+        for left in ["x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r26"] {
             XCTAssertEqual(EngineStore.successor(for: try one(left), among: all, shipped: shipped, macOS: "27.0")?.id,
-                           "x64-sikarugir10.0_6-r26", "a default-line environment on \(left) must not move to the D3DMetal 4 line")
+                           "x64-sikarugir10.0_6-r28", "a default-line environment on \(left) must not move to the D3DMetal 4 line")
         }
         for rollback in ["x64-sikarugir10.0_6-r13", "x64-sikarugir10.0_6-r15", "x64-sikarugir10.0_6-r17", "x64-sikarugir10.0_6-r19", "x64-sikarugir10.0_6-r21",
-                         "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r25"] {
+                         "x64-sikarugir10.0_6-r22", "x64-sikarugir10.0_6-r23", "x64-sikarugir10.0_6-r24", "x64-sikarugir10.0_6-r25",
+                         "x64-sikarugir10.0_6-r26", "x64-sikarugir10.0_6-r27"] {
             XCTAssertNotNil(all.first { $0.id == rollback }, "\(rollback) stays offered for rollback")
         }
     }
