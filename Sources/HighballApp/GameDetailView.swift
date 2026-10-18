@@ -156,10 +156,22 @@ struct GameDetailView: View {
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 }
                 if !details.description.isEmpty, details.description != details.summary {
-                    DisclosureGroup(L("Read more"), isExpanded: $expandedDescription) {
+                    DisclosureGroup(isExpanded: $expandedDescription) {
                         Text(verbatim: details.description).font(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10)
+                    } label: {
+                        // The words open it too, not only the chevron: with a plain label macOS
+                        // toggles a DisclosureGroup from its chevron alone, and players clicked
+                        // "Read more" and saw nothing happen.
+                        Button { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) { expandedDescription.toggle() } } label: {
+                            HStack(spacing: 8) {
+                                Text(L("Read more"))
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 if !details.genres.isEmpty {
