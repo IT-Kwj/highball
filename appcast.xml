@@ -5,6 +5,14 @@
     <link>https://github.com/gauthierpiarrette/highball</link>
     <description>Run Windows games on Apple Silicon.</description>
     <item>
+      <title>Highball 0.10.18</title>
+      <description><![CDATA[Steep starts on Apple silicon with the new default Wine 10 engine r28 (thanks to @Sean-Shmulevich, highball-db#465), and Microsoft Flight Simulator 2024 on the native arm64 preview engine starts again (a regression in 0.10.17).]]></description>
+      <pubDate>Sun, 18 Oct 2026 03:13:06 +0200</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>beta</sparkle:channel>
+      <enclosure url="https://github.com/gauthierpiarrette/highball/releases/download/v0.10.18/Highball-0.10.18.zip" sparkle:version="0.10.18" sparkle:shortVersionString="0.10.18" sparkle:edSignature="2MSEP1WHdAKBu/89WS8JKlE7QSZyK3GHySI1bBbavwoZO/XDXtw5odJQDP4+uaRgA4RFYCyzmSdwUCCVZgHzBw==" length="5274116" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Highball 0.10.17</title>
       <description><![CDATA[Games can open on the display you pick (thanks to @tuandinh0801, highball#360), and macOS Game Mode now engages for Wine games, so a full-screen game gets the highest priority on the CPU and GPU as native games do (thanks to @dtacci, highball#339). Also new Wine 11 engines r26 and r27 with Apple's D3DMetal from Game Porting Toolkit 4.0 beta 3, and the vkd3d mode keeps its shader pipeline cache between starts.]]></description>
       <pubDate>Sat, 17 Oct 2026 23:04:45 +0200</pubDate>
