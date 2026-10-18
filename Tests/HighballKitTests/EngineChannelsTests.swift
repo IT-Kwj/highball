@@ -44,6 +44,33 @@ final class EngineChannelsTests: XCTestCase {
         XCTAssertFalse(EngineChannels.hidesPin("x64-line-r10", bundled: bundled, beta: false, preview: false))
     }
 
+    func testAPreviewEngineTakenForAGameIsSeenAndNoOtherIs() throws {
+        let line = try manifest(id: "arm64-line-r1", channel: "preview")
+        let other = try manifest(id: "arm64-line-r2", channel: "preview")
+        let betaLine = try manifest(id: "x64-beta-r1", channel: "beta")
+        XCTAssertTrue(EngineChannels.visible(line, beta: false, preview: false, optedIn: ["arm64-line-r1"]))
+        XCTAssertFalse(EngineChannels.visible(other, beta: false, preview: false, optedIn: ["arm64-line-r1"]))
+        // An opt-in reaches preview engines only: a beta line stays with beta builds.
+        XCTAssertFalse(EngineChannels.visible(betaLine, beta: false, preview: false, optedIn: ["x64-beta-r1"]))
+        XCTAssertFalse(EngineChannels.hidesPin("arm64-line-r1", bundled: [line], beta: false, preview: false, optedIn: ["arm64-line-r1"]))
+        XCTAssertTrue(EngineChannels.hidesPin("arm64-line-r1", bundled: [line], beta: false, preview: false, optedIn: []))
+    }
+
+    func testPlayOffersAHiddenPreviewPinAndNothingElse() throws {
+        let bundled = [try manifest(id: "arm64-line-r1", channel: "preview"), try manifest(id: "x64-line-r9", channel: nil),
+                       try manifest(id: "x64-beta-r1", channel: "beta")]
+        XCTAssertEqual(EngineChannels.previewToOffer(pin: "arm64-line-r1", bundled: bundled, beta: false, preview: false, optedIn: [])?.id,
+                       "arm64-line-r1")
+        // Seen already (the key, or taken once for a game): the usual engine ask takes over.
+        XCTAssertNil(EngineChannels.previewToOffer(pin: "arm64-line-r1", bundled: bundled, beta: false, preview: true, optedIn: []))
+        XCTAssertNil(EngineChannels.previewToOffer(pin: "arm64-line-r1", bundled: bundled, beta: false, preview: false,
+                                                   optedIn: ["arm64-line-r1"]))
+        XCTAssertNil(EngineChannels.previewToOffer(pin: "x64-line-r9", bundled: bundled, beta: false, preview: false, optedIn: []))
+        XCTAssertNil(EngineChannels.previewToOffer(pin: "x64-beta-r1", bundled: bundled, beta: false, preview: false, optedIn: []))
+        XCTAssertNil(EngineChannels.previewToOffer(pin: "x64-line-r10", bundled: bundled, beta: false, preview: false, optedIn: []))
+        XCTAssertNil(EngineChannels.previewToOffer(pin: nil, bundled: bundled, beta: false, preview: false, optedIn: []))
+    }
+
     func testEveryEngineThePlayersHaveTodayHasNoChannel() throws {
         let dir = repo.appending(path: "spike/engines")
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)

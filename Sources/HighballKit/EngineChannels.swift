@@ -11,6 +11,9 @@ public enum EngineChannels {
     /// The UserDefaults key that shows preview engines. No UI on purpose:
     /// `defaults write app.highball.Highball previewEngines -bool true`.
     public static let previewDefaultsKey = "previewEngines"
+    /// Preview engines a player took from Play for a game whose recipe asks for one (the ask's "Use the
+    /// preview engine"), by engine id: seen from then on as with the preview key, for those engines only.
+    public static let optInDefaultsKey = "previewEngineOptIns"
 
     public static func visible(channel: String?, beta: Bool, preview: Bool) -> Bool {
         switch channel {
@@ -20,12 +23,30 @@ public enum EngineChannels {
         }
     }
 
+    /// The same rule for one engine, counting the player's opt-ins: a preview engine they took for a game.
+    public static func visible(_ manifest: EngineManifest, beta: Bool, preview: Bool, optedIn: Set<String>) -> Bool {
+        visible(channel: manifest.channel, beta: beta, preview: preview)
+            || (manifest.channel == Self.preview && optedIn.contains(manifest.id))
+    }
+
     /// Whether a recipe's engine pin names a bundled engine this install may not see. Such a recipe
     /// is not offered at all: without this, Play would find the pin missing from the visible engines
     /// and tell the player to update Highball, though no update would show it either. A pin no
     /// bundled manifest carries is not hidden; that case keeps its own "update Highball" answer.
-    public static func hidesPin(_ pin: String?, bundled: [EngineManifest], beta: Bool, preview: Bool) -> Bool {
+    public static func hidesPin(_ pin: String?, bundled: [EngineManifest], beta: Bool, preview: Bool,
+                                optedIn: Set<String> = []) -> Bool {
         guard let pin, let manifest = bundled.first(where: { $0.id == pin }) else { return false }
-        return !visible(channel: manifest.channel, beta: beta, preview: preview)
+        return !visible(manifest, beta: beta, preview: preview, optedIn: optedIn)
+    }
+
+    /// The preview engine a recipe pins while this install does not see it: Play offers it instead of
+    /// launching the game as if the recipe did not exist, which for Microsoft Flight Simulator 2024 meant
+    /// a Rosetta engine the game cannot start on (2026-10-18). nil for a visible pin, a pin on another
+    /// hidden channel (beta lines reach players through beta builds) or a pin no bundled manifest carries.
+    public static func previewToOffer(pin: String?, bundled: [EngineManifest], beta: Bool, preview: Bool,
+                                      optedIn: Set<String>) -> EngineManifest? {
+        guard let pin, let manifest = bundled.first(where: { $0.id == pin }), manifest.channel == Self.preview,
+              !visible(manifest, beta: beta, preview: preview, optedIn: optedIn) else { return nil }
+        return manifest
     }
 }

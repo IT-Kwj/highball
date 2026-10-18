@@ -276,7 +276,17 @@ public struct Recipe: Codable, Sendable, Identifiable {
     /// The engine this recipe needs, by manifest id (the EA app needs the Wine 11 tree, #60).
     /// Highball offers that engine before applying the recipe to an environment on another Wine.
     public var engine: String?
+    /// The memory a Mac needs for this game on the recipe's engine, in GB (Microsoft Flight Simulator 2024 holds
+    /// about 25 GB on the native arm64 line). Data: Play's engine and preview asks say so on a Mac with less, before
+    /// a download that could not run there. nil when the recipe names no floor.
+    public var minMemoryGB: Int?
     public var steps: [Step]
+
+    /// The recipe's memory floor and this Mac's memory in GB when the Mac is under it, nil otherwise.
+    public func memoryShortfall(memoryMB: Int) -> (needGB: Int, haveGB: Int)? {
+        guard let need = minMemoryGB, memoryMB < need * 1024 else { return nil }
+        return (need, Int((Double(memoryMB) / 1024).rounded()))
+    }
     public var knownIssues: [KnownIssue]?
     public var lastVerified: Verification?
     public var blocked: Blocked?
