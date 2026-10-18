@@ -405,8 +405,22 @@ final class AppState {
         let defaults = UserDefaults.standard
         if EngineChannels.hidesPin(recipe.engine, bundled: Self.bundledManifests,
                                    beta: defaults.bool(forKey: UpdateChannels.betaDefaultsKey),
-                                   preview: defaults.bool(forKey: EngineChannels.previewDefaultsKey)) { return nil }
+                                   preview: defaults.bool(forKey: EngineChannels.previewDefaultsKey),
+                                   optedIn: Self.previewOptIns) { return nil }
         return recipe
+    }
+
+    /// The preview engine a game's recipe pins while this Mac does not see it (EngineChannels.previewToOffer): Play
+    /// asks the player before anything changes. An opt-in recipe stays the page's business, as everywhere.
+    func previewOffer(for item: LibraryItem) -> (recipe: HighballKit.Recipe, manifest: EngineManifest)? {
+        guard let entry = gameDB.entry(for: item), let recipe = Self.recipe(entry.id), recipe.kind == .game, !recipe.isOptIn
+        else { return nil }
+        let defaults = UserDefaults.standard
+        guard let manifest = EngineChannels.previewToOffer(pin: recipe.engine, bundled: Self.bundledManifests,
+                                                           beta: defaults.bool(forKey: UpdateChannels.betaDefaultsKey),
+                                                           preview: defaults.bool(forKey: EngineChannels.previewDefaultsKey),
+                                                           optedIn: Self.previewOptIns) else { return nil }
+        return (recipe, manifest)
     }
 
 
@@ -424,6 +438,18 @@ final class AppState {
         guard let bottleName = item.bottleName,
               let found = bottles.first(where: { $0.name == bottleName }) else { return }
         var bottle = found
+        // A recipe pinned to a preview engine this Mac does not see yet: before 0.10.19 Play launched the game here
+        // as if the recipe did not exist, which for Microsoft Flight Simulator 2024 was a Rosetta engine it cannot
+        // start on. An environment already on that engine counts as the player's choice; any other asks first.
+        if fixRecipe(for: item) == nil, let offer = previewOffer(for: item) {
+            if let current = engine(for: bottle), EngineManifest.satisfies(current: current.manifest, wanted: offer.manifest) {
+                Self.optInPreview(offer.manifest.id)
+                play(item, renderer: renderer, windowsBuild: windowsBuild)
+            } else {
+                pendingPreview = (offer.recipe, bottle, offer.manifest, item, renderer)
+            }
+            return
+        }
         // A game whose recipe was applied before variables were scoped still has them bottle-wide,
         // where every other program inherits them (highball#198). Move them to the game once; the
         // launch below then carries them for this game only, and the log says what moved. Then the
@@ -1423,6 +1449,34 @@ final class AppState {
     /// still run it without the fix, or nil when the page's own button asked for the fix.
     var pendingUpdate: (recipe: HighballKit.Recipe, engineID: String, play: (item: LibraryItem, bottle: Bottle, renderer: Renderer?)?)?
 
+    /// A game whose recipe pins a preview engine this Mac does not see yet, asked from Play (previewOffer).
+    var pendingPreview: (recipe: HighballKit.Recipe, bottle: Bottle, manifest: EngineManifest, item: LibraryItem, renderer: Renderer?)?
+
+    /// The preview ask's way in: that engine is offered on this Mac from now on, and Play goes on to the usual
+    /// engine ask, which makes the environment (the game coming along when it can).
+    func acceptPreview() {
+        guard let pending = pendingPreview else { return }
+        pendingPreview = nil
+        Self.optInPreview(pending.manifest.id)
+        appendLog("\(pending.item.title): the \(pending.manifest.id) preview engine is offered on this Mac from now on")
+        play(pending.item, renderer: pending.renderer)
+    }
+
+    /// The preview ask's way out that keeps playing: as before the ask existed, on the current engine.
+    func playWithoutPreview() {
+        guard let pending = pendingPreview else { return }
+        pendingPreview = nil
+        appendLog("\(pending.item.title): its fix needs the \(pending.manifest.id) preview engine; playing without it.")
+        launch(pending.item, in: pending.bottle, renderer: pending.renderer)
+    }
+
+    /// Whether the game Play started from `bottle` can come along to a new environment as a clone.
+    func canCarryGame(_ item: LibraryItem?, from bottle: Bottle) -> Bool {
+        guard let item, item.source == .steam, let appid = item.steamAppID,
+              let game = (gamesByBottle[bottle.name] ?? []).first(where: { $0.appid == appid }) else { return false }
+        return SteamGameCarryOver.canCarry(game, toBottlesRoot: paths.bottles)
+    }
+
     /// The ask's first way out: a new environment on the engine the recipe names, the recipe
     /// applied; the engine downloads first when it is not installed. A new environment starts
     /// without the game, so for a Steam game the done row's button hands it to that environment's
@@ -1433,10 +1487,24 @@ final class AppState {
         let name = BottleStore.freeName(recipe.title, taken: Set(bottles.map(\.name)))
         let accepted = Set(engines.flatMap { $0.manifest.acceptedLicenses ?? [] })
         let done: DoneState
+        // The game installed where Play started comes along as a clone when it can (SteamGameCarryOver): no second
+        // download, no extra disk, the original untouched. The done row then offers Play; `carried` says what
+        // actually happened, so a clone the file system refuses at the last moment still ends in Install.
+        let source = item.flatMap { item in bottles.first { $0.name == item.bottleName } }
+        let carries = source.map { canCarryGame(item, from: $0) } ?? false
+        let carried = CarryFlag()
         if let item, item.source == .steam {
             done = DoneState(title: String(format: L("The %@ environment is ready"), name),
-                             ctaTitle: String(format: L("Install %@"), displayTitle(item)),
-                             cta: { [weak self] in self?.installSteamGame(item.homed(in: name)) })
+                             ctaTitle: String(format: carries ? L("Play %@") : L("Install %@"), displayTitle(item)),
+                             cta: { [weak self] in
+                                 guard let self else { return }
+                                 if carried.value {
+                                     self.refresh()
+                                     self.play((self.libraryItems.first { $0.id == item.id } ?? item).homed(in: name))
+                                 } else {
+                                     self.installSteamGame(item.homed(in: name))
+                                 }
+                             })
         } else {
             done = DoneState(title: String(format: L("%@ installed"), recipe.title), ctaTitle: nil, cta: nil)
         }
@@ -1469,9 +1537,29 @@ final class AppState {
             }
             notes += try await runner.apply(recipe, resolve: { Self.recipe($0) }) { line in Task { @MainActor in self.appendLog(line) } }
             for n in notes { await MainActor.run { self.appendLog("note: \(n)") } }
+            if carries, let item, let appid = item.steamAppID, let source,
+               let game = SteamLibrary.games(in: source).first(where: { $0.appid == appid }),
+               let steam = SteamLibrary.steamRoot(of: runner.bottle) {
+                // The new environment's Steam reads the record when it next starts, so it is stopped first; a Steam
+                // already running would offer to download the game Play is about to find installed.
+                try? await WineRunner(paths: paths, engine: engine, bottle: runner.bottle).stopSteam()
+                let outcome = SteamGameCarryOver.carry(game, into: steam.appending(path: "steamapps", directoryHint: .isDirectory))
+                await MainActor.run {
+                    switch outcome {
+                    case .carried:
+                        carried.value = true
+                        self.appendLog("\(item.title): carried over from '\(source.name)' as a clone, no download and no extra disk space")
+                    case .skipped(let why):
+                        self.appendLog("\(item.title): not carried over from '\(source.name)': \(why); the new environment's Steam installs it")
+                    }
+                }
+            }
             await MainActor.run { self.selectedBottle = name }
         }
     }
+
+    /// What the carry-over in createEnvironment did, read by the done row's button.
+    @MainActor final class CarryFlag { var value = false }
 
     /// The update ask's way out that keeps playing: the game launches as it would have before
     /// the recipe existed, on the current engine, and the log says which fix it went without.
@@ -2875,7 +2963,20 @@ final class AppState {
         let defaults = UserDefaults.standard
         let beta = defaults.bool(forKey: UpdateChannels.betaDefaultsKey)
         let preview = defaults.bool(forKey: EngineChannels.previewDefaultsKey)
-        return bundledManifests.filter { EngineChannels.visible(channel: $0.channel, beta: beta, preview: preview) }
+        let optedIn = previewOptIns
+        return bundledManifests.filter { EngineChannels.visible($0, beta: beta, preview: preview, optedIn: optedIn) }
+    }
+
+    /// Preview engines the player took from Play for a game (EngineChannels.optInDefaultsKey).
+    static var previewOptIns: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: EngineChannels.optInDefaultsKey) ?? [])
+    }
+
+    static func optInPreview(_ id: String) {
+        var ids = UserDefaults.standard.stringArray(forKey: EngineChannels.optInDefaultsKey) ?? []
+        guard !ids.contains(id) else { return }
+        ids.append(id)
+        UserDefaults.standard.set(ids, forKey: EngineChannels.optInDefaultsKey)
     }
 
     /// Every engine manifest the app ships, visible or not: the default one plus

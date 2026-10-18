@@ -227,6 +227,7 @@ struct ContentView: View {
         .d3dMetalAsk(state)
         .engineAsk(state)
         .updateAsk(state)
+        .previewAsk(state)
         .uninstallAsk(state)
         .rendererTrialAsk(state)
         .modesetTrialAsk(state)
@@ -425,9 +426,23 @@ private extension View {
             Text(GamePageCopy.engineAsk(recipe: pending.recipe, manifest: pending.manifest, installed: state.engines.contains { $0.id == pending.manifest.id },
                                         others: state.otherProgramCount(in: pending.bottle, besides: pending.recipe),
                                         existing: pending.fit.map { ($0.name, pending.item?.otherBottles.contains($0.name) == true) },
-                                        canMove: state.canMove(pending.bottle, to: pending.manifest)))
+                                        canMove: state.canMove(pending.bottle, to: pending.manifest),
+                                        carriesGame: state.canCarryGame(pending.item, from: pending.bottle)))
         }
     }
+    /// A game whose recipe pins a preview engine this Mac does not see yet (AppState.previewOffer).
+    @MainActor func previewAsk(_ state: AppState) -> some View {
+        self.alert(state.pendingPreview.map { String(format: L("%@ runs on a preview engine"), $0.recipe.title) } ?? "",
+                   isPresented: .init(get: { state.pendingPreview != nil }, set: { if !$0 { state.pendingPreview = nil } }),
+                   presenting: state.pendingPreview) { _ in
+            Button(L("Use the preview engine")) { state.acceptPreview() }
+            Button(L("Play without it")) { state.playWithoutPreview() }
+            Button(L("Not now"), role: .cancel) { state.pendingPreview = nil }
+        } message: { pending in
+            Text(GamePageCopy.previewAsk(recipe: pending.recipe, manifest: pending.manifest))
+        }
+    }
+
     @MainActor func updateAsk(_ state: AppState) -> some View {
         self.alert(state.pendingUpdate.map { String(format: L("%@ needs a newer Highball"), $0.recipe.title) } ?? "",
                isPresented: .init(get: { state.pendingUpdate != nil }, set: { if !$0 { state.pendingUpdate = nil } }),

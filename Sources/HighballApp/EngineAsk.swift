@@ -27,23 +27,56 @@ extension GamePageCopy {
     /// in it; the ask then offers it first (highball-db#318).
     /// `canMove` is false when the environment's engine is of another architecture than the
     /// recipe's (EngineStore.sameArch): only a new environment is offered then.
+    /// `carriesGame` is true when the game installed in this environment can come along to a new one as an APFS
+    /// clone (SteamGameCarryOver): no second download, no extra disk. `memoryMB` is this Mac's memory, checked
+    /// against the recipe's minMemoryGB.
     static func engineAsk(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool, others: Int,
-                          existing: (name: String, holdsGame: Bool)? = nil, canMove: Bool = true) -> String {
+                          existing: (name: String, holdsGame: Bool)? = nil, canMove: Bool = true,
+                          carriesGame: Bool = false, memoryMB: Int = Machine.memoryMB) -> String {
         guard let existing else {
-            guard canMove else { return engineAskOtherArch(recipe: recipe, manifest: manifest, installed: installed) }
+            guard canMove else {
+                return engineAskOtherArch(recipe: recipe, manifest: manifest, installed: installed, carriesGame: carriesGame)
+                    + memoryNote(recipe: recipe, memoryMB: memoryMB)
+            }
             return engineAskBody(recipe: recipe, manifest: manifest, installed: installed, others: others)
+                + memoryNote(recipe: recipe, memoryMB: memoryMB)
         }
-        return existing.holdsGame
+        return (existing.holdsGame
             ? String(format: L("'%@' is already on the %@ engine and has the game installed, so it plays there. This environment stays as it is."), existing.name, shortEngineName(manifest))
-            : String(format: L("'%@' is already on the %@ engine. Using it installs the game there, with what it needs, and this environment stays as it is."), existing.name, shortEngineName(manifest))
+            : String(format: L("'%@' is already on the %@ engine. Using it installs the game there, with what it needs, and this environment stays as it is."), existing.name, shortEngineName(manifest)))
+            + memoryNote(recipe: recipe, memoryMB: memoryMB)
     }
 
-    private static func engineAskOtherArch(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool) -> String {
+    private static func engineAskOtherArch(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool,
+                                           carriesGame: Bool) -> String {
         let download = installed ? "" : String(format: L(", after a download of about %@"), downloadSize(manifest))
+        if carriesGame {
+            let text = manifest.isNativeARM64
+                ? L("%@ is verified on the %@ engine, which runs natively on Apple silicon. This environment's engine runs through Rosetta, so the environment cannot move to it. A new environment gets a Steam of its own%@, and the game installed here comes along without a new download or extra disk space. This environment stays as it is.")
+                : L("%@ is verified on the %@ engine, which runs through Rosetta. This environment's engine runs natively on Apple silicon, so the environment cannot move to it. A new environment gets a Steam of its own%@, and the game installed here comes along without a new download or extra disk space. This environment stays as it is.")
+            return String(format: text, recipe.title, shortEngineName(manifest), download)
+        }
         let text = manifest.isNativeARM64
             ? L("%@ is verified on the %@ engine, which runs natively on Apple silicon. This environment's engine runs through Rosetta, so the environment cannot move to it. A new environment starts empty%@, and the game has to be installed again.")
             : L("%@ is verified on the %@ engine, which runs through Rosetta. This environment's engine runs natively on Apple silicon, so the environment cannot move to it. A new environment starts empty%@, and the game has to be installed again.")
         return String(format: text, recipe.title, shortEngineName(manifest), download)
+    }
+
+    /// A recipe pinned to a preview engine this Mac does not see yet: Play asks before anything changes. Before
+    /// 0.10.19 Play launched such a game on the current engine as if the recipe did not exist, which for Microsoft
+    /// Flight Simulator 2024 was a Rosetta engine it cannot start on.
+    static func previewAsk(recipe: HighballKit.Recipe, manifest: EngineManifest, memoryMB: Int = Machine.memoryMB) -> String {
+        let text = manifest.isNativeARM64
+            ? L("%@ is verified on the %@ engine, which runs natively on Apple silicon and is still in preview: the game plays, with the rough edges its page lists. Highball offers that engine for this game, sets it up in an environment of its own, and leaves this one as it is.")
+            : L("%@ is verified on the %@ engine, which is still in preview: the game plays, with the rough edges its page lists. Highball offers that engine for this game, sets it up in an environment of its own, and leaves this one as it is.")
+        return String(format: text, recipe.title, shortEngineName(manifest)) + memoryNote(recipe: recipe, memoryMB: memoryMB)
+    }
+
+    /// One sentence when the recipe names a memory floor this Mac is under, empty otherwise.
+    static func memoryNote(recipe: HighballKit.Recipe, memoryMB: Int) -> String {
+        guard let short = recipe.memoryShortfall(memoryMB: memoryMB) else { return "" }
+        return " " + String(format: L("It needs about %d GB of memory and this Mac has %d GB, so it is unlikely to run here."),
+                            short.needGB, short.haveGB)
     }
 
     private static func engineAskBody(recipe: HighballKit.Recipe, manifest: EngineManifest, installed: Bool, others: Int) -> String {
