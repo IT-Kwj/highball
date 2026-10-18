@@ -5,6 +5,14 @@
     <link>https://github.com/gauthierpiarrette/highball</link>
     <description>Run Windows games on Apple Silicon.</description>
     <item>
+      <title>Highball 0.10.19</title>
+      <description><![CDATA[Play now offers the native arm64 preview engine to Microsoft Flight Simulator 2024, and the game you already installed comes along without a new download.]]></description>
+      <pubDate>Sun, 18 Oct 2026 15:29:37 +0200</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>beta</sparkle:channel>
+      <enclosure url="https://github.com/gauthierpiarrette/highball/releases/download/v0.10.19/Highball-0.10.19.zip" sparkle:version="0.10.19" sparkle:shortVersionString="0.10.19" sparkle:edSignature="NRz2iFfz0qsVGVHYHtzNvSpOnlOrKZ3pWUZc8enGYA53PliaesFxyRN/jwVnuuJDhJHFbjxjApYi0z+rcIU8Dg==" length="5294524" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Highball 0.10.18</title>
       <description><![CDATA[Steep starts on Apple silicon with the new default Wine 10 engine r28 (thanks to @Sean-Shmulevich, highball-db#465), and Microsoft Flight Simulator 2024 on the native arm64 preview engine starts again (a regression in 0.10.17).]]></description>
       <pubDate>Sun, 18 Oct 2026 03:13:06 +0200</pubDate>
