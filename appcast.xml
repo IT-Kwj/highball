@@ -14,7 +14,7 @@
     </item>
     <item>
       <title>Highball 0.10.20</title>
-      <description><![CDATA[<p>Microsoft Flight Simulator 2024 stutters far less on the native arm64 preview engine. In test flights on a base M4, frames over 100 ms fell from 59 to 5 in two minutes parked on the runway. Press Play on the game to get the new revision, r5. This update also brings everything new since 0.10.15.</p><ul><li>Forza Horizon 6's dialogue and engine sound play on Mac speakers and headphones with the Wine 11 engines r24 and later. Thanks to @TxCsOffc.</li><li>macOS Game Mode engages for Wine games (thanks to @dtacci), and a game can open on the display you pick (thanks to @tuandinh0801).</li><li>Steep starts on Apple silicon (thanks to @Sean-Shmulevich), and Red Dead Redemption 2 no longer stops with Rockstar launcher error 113 (thanks to crêpe on Discord).</li><li>Flight Simulator 2024 is one click from the preview engine, and the game you installed comes along without a new download.</li></ul>]]></description>
+      <description><![CDATA[<p>Microsoft Flight Simulator 2024 stutters far less on the native arm64 preview engine. In test flights on a base M4, frames over 100 ms fell from 59 to 5 in two minutes parked on the runway. Press Play on the game to get the new revision, r5. This update also brings everything new since 0.10.15.</p><ul><li>Forza Horizon 6's dialogue and engine sound play on Mac speakers and headphones with the Wine 11 engines r24 and later. Thanks to @TxCsOffc.</li><li>A game can open on the display you pick (thanks to @tuandinh0801), and games on the arm64 preview engine can get macOS Game Mode (thanks to @dtacci).</li><li>Steep starts on Apple silicon (thanks to @Sean-Shmulevich), and Red Dead Redemption 2 no longer stops with Rockstar launcher error 113 (thanks to crêpe on Discord).</li><li>Flight Simulator 2024 is one click from the preview engine, and the game you installed comes along without a new download.</li></ul>]]></description>
       <pubDate>Mon, 19 Oct 2026 13:14:41 +0200</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>
@@ -38,7 +38,7 @@
     </item>
     <item>
       <title>Highball 0.10.17</title>
-      <description><![CDATA[Games can open on the display you pick (thanks to @tuandinh0801, highball#360), and macOS Game Mode now engages for Wine games, so a full-screen game gets the highest priority on the CPU and GPU as native games do (thanks to @dtacci, highball#339). Also new Wine 11 engines r26 and r27 with Apple's D3DMetal from Game Porting Toolkit 4.0 beta 3, and the vkd3d mode keeps its shader pipeline cache between starts.]]></description>
+      <description><![CDATA[Games can open on the display you pick (thanks to @tuandinh0801, highball#360), and games on the arm64 preview engine can get macOS Game Mode, which gives a full-screen game the highest priority on the CPU and GPU as native games get (thanks to @dtacci, highball#339). Also new Wine 11 engines r26 and r27 with Apple's D3DMetal from Game Porting Toolkit 4.0 beta 3, and the vkd3d mode keeps its shader pipeline cache between starts.]]></description>
       <pubDate>Sat, 17 Oct 2026 23:04:45 +0200</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <sparkle:channel>beta</sparkle:channel>
