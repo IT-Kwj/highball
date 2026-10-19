@@ -228,6 +228,7 @@ struct ContentView: View {
         .engineAsk(state)
         .updateAsk(state)
         .previewAsk(state)
+        .previewMoveAsk(state)
         .uninstallAsk(state)
         .rendererTrialAsk(state)
         .modesetTrialAsk(state)
@@ -279,14 +280,19 @@ struct ContentView: View {
             openSettings()
         }
         // HB_DEBUG_PLAY="<library item id>" presses Play on that tile, so a script can capture
-        // the questions Play asks (the engine ask, highball-db#318).
+        // the questions Play asks (the engine ask, highball-db#318; the preview asks, 0.10.19 and 0.10.20).
+        // HB_DEBUG_ACCEPT=1 then answers a preview ask with "Use the preview engine" and notes the next question.
         .task {
             guard let id = ProcessInfo.processInfo.environment["HB_DEBUG_PLAY"] else { return }
             for _ in 0..<30 {
                 try? await Task.sleep(for: .seconds(1))
                 guard let item = state.libraryItems.first(where: { $0.id == id }) else { continue }
                 state.play(item)
-                debugNote(state.paths.logs, "HB_DEBUG_PLAY \(id) in \(item.bottleName ?? "-"): engine ask \(state.pendingEngine.map { "for \($0.manifest.id)" } ?? "not raised")")
+                debugNote(state.paths.logs, "HB_DEBUG_PLAY \(id) in \(item.bottleName ?? "-"): \(debugAsks(state))")
+                if ProcessInfo.processInfo.environment["HB_DEBUG_ACCEPT"] == "1", state.pendingPreview != nil {
+                    state.acceptPreview()
+                    debugNote(state.paths.logs, "HB_DEBUG_PLAY \(id) after Use the preview engine: \(debugAsks(state))")
+                }
                 return
             }
             debugNote(state.paths.logs, "HB_DEBUG_PLAY \(id): no such tile among \(state.libraryItems.count)")
@@ -440,6 +446,19 @@ private extension View {
             Button(L("Not now"), role: .cancel) { state.pendingPreview = nil }
         } message: { pending in
             Text(GamePageCopy.previewAsk(recipe: pending.recipe, manifest: pending.manifest))
+        }
+    }
+    /// An environment on an earlier revision of the preview line its game's recipe pins (AppState.pendingPreviewMove).
+    @MainActor func previewMoveAsk(_ state: AppState) -> some View {
+        self.alert(state.pendingPreviewMove.map { String(format: L("A newer preview engine for %@"), $0.recipe.title) } ?? "",
+                   isPresented: .init(get: { state.pendingPreviewMove != nil }, set: { if !$0 { state.pendingPreviewMove = nil } }),
+                   presenting: state.pendingPreviewMove) { pending in
+            Button(L("Move this environment")) { state.acceptPreviewMove() }
+            Button(String(format: L("Play on %@"), GamePageCopy.revisionName(pending.current))) { state.playWithoutPreviewMove() }
+            Button(L("Not now"), role: .cancel) { state.pendingPreviewMove = nil }
+        } message: { pending in
+            Text(GamePageCopy.previewMoveAsk(recipe: pending.recipe, current: pending.current, manifest: pending.manifest,
+                                             installed: state.engines.contains { $0.id == pending.manifest.id }))
         }
     }
 
@@ -711,5 +730,12 @@ struct ErrorDetailsSheet: View {
     let text = "\(Date()) \(line)\n"
     if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(text.utf8)); try? h.close() }
     else { try? text.write(to: url, atomically: true, encoding: .utf8) }
+}
+
+/// The questions Play left open, for HB_DEBUG_PLAY's note.
+@MainActor func debugAsks(_ state: AppState) -> String {
+    "engine ask \(state.pendingEngine.map { "for \($0.manifest.id)" } ?? "not raised"), "
+        + "preview ask \(state.pendingPreview.map { "for \($0.manifest.id)" } ?? "not raised"), "
+        + "preview move \(state.pendingPreviewMove.map { "from \($0.current.id) to \($0.manifest.id)" } ?? "not raised")"
 }
 #endif

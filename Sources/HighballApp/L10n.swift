@@ -323,6 +323,10 @@ enum L10n {
             "%@ nécessite une configuration unique pour fonctionner comme vérifié.",
         "Install the fix first": "Installer d'abord le correctif",
         "Play without it": "Jouer sans",
+        "A newer preview engine for %@": "Un moteur en préversion plus récent pour %@",
+        "Play on %@": "Jouer sur %@",
+        "%@ is now verified on %@ of its preview engine, and this environment still runs %@. Moving the environment switches it there%@ and keeps the game and everything else installed. The Windows setup re-runs, which takes a minute or two. Highball asks this once, and the environment's Engine setting can move it later.":
+            "%@ est désormais vérifié sur la révision %@ de son moteur en préversion, et cet environnement utilise encore la %@. Déplacer l'environnement le fait passer sur cette révision%@ et garde le jeu et tout le reste installés. La configuration de Windows se relance, ce qui prend une minute ou deux. Highball ne pose la question qu'une fois, et le réglage Moteur de l'environnement permet de le déplacer plus tard.",
         "This installs the dependencies the compatibility database verified.":
             "Ceci installe les dépendances vérifiées par la base de compatibilité.",
         "Sets this game up the way the compatibility database verified it — renderer, settings, dependencies.":

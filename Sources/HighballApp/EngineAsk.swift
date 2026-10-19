@@ -72,6 +72,18 @@ extension GamePageCopy {
         return String(format: text, recipe.title, shortEngineName(manifest)) + memoryNote(recipe: recipe, memoryMB: memoryMB)
     }
 
+    /// "r5" for arm64-wine11.18-r5, the id itself when it carries no revision.
+    static func revisionName(_ m: EngineManifest) -> String {
+        EngineManifest.revision(of: m.id).map { "r\($0)" } ?? m.id
+    }
+
+    /// An environment on an earlier revision of the preview line its game's recipe pins (AppState.pendingPreviewMove).
+    static func previewMoveAsk(recipe: HighballKit.Recipe, current: EngineManifest, manifest: EngineManifest, installed: Bool) -> String {
+        let download = installed ? "" : String(format: L(", after a download of about %@"), downloadSize(manifest))
+        return String(format: L("%@ is now verified on %@ of its preview engine, and this environment still runs %@. Moving the environment switches it there%@ and keeps the game and everything else installed. The Windows setup re-runs, which takes a minute or two. Highball asks this once, and the environment's Engine setting can move it later."),
+                      recipe.title, revisionName(manifest), revisionName(current), download)
+    }
+
     /// One sentence when the recipe names a memory floor this Mac is under, empty otherwise.
     static func memoryNote(recipe: HighballKit.Recipe, memoryMB: Int) -> String {
         guard let short = recipe.memoryShortfall(memoryMB: memoryMB) else { return "" }

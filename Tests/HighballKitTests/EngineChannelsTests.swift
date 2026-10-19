@@ -71,6 +71,36 @@ final class EngineChannelsTests: XCTestCase {
         XCTAssertNil(EngineChannels.previewToOffer(pin: nil, bundled: bundled, beta: false, preview: false, optedIn: []))
     }
 
+    private func recipe(engine: String) throws -> Recipe {
+        let json = "{\"id\": \"game\", \"kind\": \"game\", \"title\": \"Game\", \"steps\": [], \"engine\": \"\(engine)\"}"
+        return try JSONDecoder().decode(Recipe.self, from: Data(json.utf8))
+    }
+
+    /// Microsoft Flight Simulator 2024 set up on r3 while its recipe now pins r5 (2026-10-19): the environment runs the
+    /// line already, so Play offers the move rather than the preview ask or a launch on r3.
+    func testAnEnvironmentOnAnEarlierPreviewRevisionIsOfferedThePinnedOne() throws {
+        let r3 = try manifest(id: "arm64-line-r3", channel: "preview")
+        let r5 = try manifest(id: "arm64-line-r5", channel: "preview")
+        let otherLine = try manifest(id: "arm64-other-r5", channel: "preview")
+        let x64 = try manifest(id: "x64-line-r21", channel: nil)
+        let x64Later = try manifest(id: "x64-line-r24", channel: nil)
+        XCTAssertTrue(EngineChannels.runsLine(current: r3, of: r5))
+        XCTAssertFalse(EngineChannels.runsLine(current: r3, of: otherLine))
+        XCTAssertFalse(EngineChannels.runsLine(current: x64, of: r5))
+
+        let game = try recipe(engine: "arm64-line-r5")
+        XCTAssertEqual(game.previewRevisionToOffer(current: r3, known: [r3, r5], macOS: "27.0")?.id, "arm64-line-r5")
+        XCTAssertNil(game.previewRevisionToOffer(current: r5, known: [r3, r5], macOS: "27.0"), "already on it")
+        XCTAssertNil(game.previewRevisionToOffer(current: r3, known: [r3], macOS: "27.0"), "a revision this install does not see")
+        XCTAssertNil(game.previewRevisionToOffer(current: otherLine, known: [otherLine, r5], macOS: "27.0"), "another line")
+        // The line decides, not the channel the installed copy of the current engine's manifest carries.
+        let r3Installed = try manifest(id: "arm64-line-r3", channel: nil)
+        XCTAssertTrue(EngineChannels.runsLine(current: r3Installed, of: r5))
+        XCTAssertEqual(game.previewRevisionToOffer(current: r3Installed, known: [r3, r5], macOS: "27.0")?.id, "arm64-line-r5")
+        // A Wine 10 or Wine 11 environment never moves on its own, whatever its recipe pins.
+        XCTAssertNil(try recipe(engine: "x64-line-r24").previewRevisionToOffer(current: x64, known: [x64, x64Later], macOS: "27.0"))
+    }
+
     func testEveryEngineThePlayersHaveTodayHasNoChannel() throws {
         let dir = repo.appending(path: "spike/engines")
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)

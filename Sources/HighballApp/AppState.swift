@@ -440,14 +440,27 @@ final class AppState {
         var bottle = found
         // A recipe pinned to a preview engine this Mac does not see yet: before 0.10.19 Play launched the game here
         // as if the recipe did not exist, which for Microsoft Flight Simulator 2024 was a Rosetta engine it cannot
-        // start on. An environment already on that engine counts as the player's choice; any other asks first.
+        // start on. An environment already on that engine counts as the player's choice, and so does one on an
+        // earlier revision of its line (the move is offered just below); any other asks first.
         if fixRecipe(for: item) == nil, let offer = previewOffer(for: item) {
-            if let current = engine(for: bottle), EngineManifest.satisfies(current: current.manifest, wanted: offer.manifest) {
+            if let current = engine(for: bottle), EngineManifest.satisfies(current: current.manifest, wanted: offer.manifest)
+                || EngineChannels.runsLine(current: current.manifest, of: offer.manifest) {
                 Self.optInPreview(offer.manifest.id)
                 play(item, renderer: renderer, windowsBuild: windowsBuild)
             } else {
                 pendingPreview = (offer.recipe, bottle, offer.manifest, item, renderer)
             }
+            return
+        }
+        // An environment on an earlier revision of the preview line its game's recipe now pins (Microsoft Flight
+        // Simulator 2024 set up on r3 when its recipe moved to r5, 2026-10-19). The engine ask further down comes only
+        // before a recipe is applied, so nothing else would offer the revision the database verifies now. Asked once
+        // per environment and revision; the environment's Engine setting can move it any time after.
+        if let recipe = fixRecipe(for: item), !recipe.isOptIn, bottle.settings.recipes.contains(recipe.id),
+           let engine = engine(for: bottle),
+           let wanted = recipe.previewRevisionToOffer(current: engine.manifest, known: Self.knownManifests),
+           Self.firstPreviewMoveAsk(bottle: bottle.name, engine: wanted.id) {
+            pendingPreviewMove = (recipe, bottle, engine.manifest, wanted, item, renderer)
             return
         }
         // A game whose recipe was applied before variables were scoped still has them bottle-wide,
@@ -1468,6 +1481,47 @@ final class AppState {
         pendingPreview = nil
         appendLog("\(pending.item.title): its fix needs the \(pending.manifest.id) preview engine; playing without it.")
         launch(pending.item, in: pending.bottle, renderer: pending.renderer)
+    }
+
+    /// An environment on an earlier revision of the preview line its game's recipe pins, asked from Play
+    /// (Recipe.previewRevisionToOffer). `current` is the revision the environment runs.
+    var pendingPreviewMove: (recipe: HighballKit.Recipe, bottle: Bottle, current: EngineManifest, manifest: EngineManifest,
+                             item: LibraryItem, renderer: Renderer?)?
+
+    /// The move's way in: the environment moves to the later revision, after a download when it is new, and the done
+    /// row offers Play, which brings the recipe's variables up to date before the launch.
+    func acceptPreviewMove() {
+        guard let pending = pendingPreviewMove else { return }
+        pendingPreviewMove = nil
+        let item = pending.item
+        moveBottle(pending.bottle, toEngineID: pending.manifest.id, done: DoneState(
+            title: L("Engine switched"), ctaTitle: String(format: L("Play %@"), displayTitle(item)),
+            cta: { [weak self] in
+                guard let self else { return }
+                self.refresh()
+                self.play(self.libraryItems.first { $0.id == item.id } ?? item)
+            }))
+    }
+
+    /// The move's way out that keeps playing, on the revision the environment runs. The ask was recorded, so Play
+    /// goes straight on.
+    func playWithoutPreviewMove() {
+        guard let pending = pendingPreviewMove else { return }
+        pendingPreviewMove = nil
+        play(pending.item, renderer: pending.renderer)
+    }
+
+    /// Environments Play offered a later preview revision, as "<environment>\t<engine id>": the ask comes once.
+    static let previewMoveAskedKey = "previewMoveAsked"
+
+    /// True the first time for an environment and revision, and records it.
+    static func firstPreviewMoveAsk(bottle: String, engine: String) -> Bool {
+        let key = "\(bottle)\t\(engine)"
+        var asked = UserDefaults.standard.stringArray(forKey: previewMoveAskedKey) ?? []
+        guard !asked.contains(key) else { return false }
+        asked.append(key)
+        UserDefaults.standard.set(asked, forKey: previewMoveAskedKey)
+        return true
     }
 
     /// Whether the game Play started from `bottle` can come along to a new environment as a clone.
