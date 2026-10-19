@@ -5,6 +5,14 @@
     <link>https://github.com/gauthierpiarrette/highball</link>
     <description>Run Windows games on Apple Silicon.</description>
     <item>
+      <title>Highball 0.10.21</title>
+      <description><![CDATA[<p>Play now says when a game's fix needs a newer macOS, before any question or download. Microsoft Flight Simulator 2024's engine needs macOS 26.5 or later, and Forza Horizon 6's needs macOS 27.</p><ul><li>A game with a Steam update waiting comes along to a new environment as a clone, so only the update downloads.</li><li>The memory note says what a game was tested with, rather than what it needs.</li></ul>]]></description>
+      <pubDate>Mon, 19 Oct 2026 15:05:34 +0200</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>
+      <enclosure url="https://github.com/gauthierpiarrette/highball/releases/download/v0.10.21/Highball-0.10.21.zip" sparkle:version="0.10.21" sparkle:shortVersionString="0.10.21" sparkle:edSignature="/fBdr8hnqxPPQzqQWLCDuCuFRKEPR5EkZlXhYGgLQ359A7dAfc7G0EErmtvoUSyUuFPBzwutFbzqBMzdVj6uAw==" length="5316291" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Highball 0.10.20</title>
       <description><![CDATA[<p>Microsoft Flight Simulator 2024 stutters far less on the native arm64 preview engine. In test flights on a base M4, frames over 100 ms fell from 59 to 5 in two minutes parked on the runway. Press Play on the game to get the new revision, r5. This update also brings everything new since 0.10.15.</p><ul><li>Forza Horizon 6's dialogue and engine sound play on Mac speakers and headphones with the Wine 11 engines r24 and later. Thanks to @TxCsOffc.</li><li>macOS Game Mode engages for Wine games (thanks to @dtacci), and a game can open on the display you pick (thanks to @tuandinh0801).</li><li>Steep starts on Apple silicon (thanks to @Sean-Shmulevich), and Red Dead Redemption 2 no longer stops with Rockstar launcher error 113 (thanks to crêpe on Discord).</li><li>Flight Simulator 2024 is one click from the preview engine, and the game you installed comes along without a new download.</li></ul>]]></description>
       <pubDate>Mon, 19 Oct 2026 13:14:41 +0200</pubDate>
