@@ -159,8 +159,22 @@ DBDIR="$(dirname "$RECIPES")/db/games"
 if [ -d "$DBDIR" ]; then mkdir -p "$APP/Contents/Resources/db-games"; cp "$DBDIR"/*.json "$APP/Contents/Resources/db-games/"; fi
 
 # App icon: the icns is the bundle's icon, the 512 px png the copy the app loads itself
-# (its Dock icon, the empty environment view, launcher shortcuts in ~/Applications/Highball).
+# (the empty environment view, launcher shortcuts in ~/Applications/Highball, the Dock icon of a
+# bare SwiftPM run). Resources/AppIcon.icon is the same icon in Icon Composer's format, the Liquid
+# Glass icon macOS 26 and later draw: actool compiles it into Assets.car (CFBundleIconName). macOS 14
+# and 15 keep the checked-in AppIcon.icns (CFBundleIconFile), a render of the same icon at every size
+# up to 1024 px (actool's own icns stops at 256). Without Xcode's actool only the icns ships, as before.
 cp Resources/AppIcon.icns Resources/AppIcon.png "$APP/Contents/Resources/"
+if xcrun --find actool >/dev/null 2>&1; then
+  ICONTMP=$(mktemp -d)
+  if xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$ICONTMP" --platform macosx --minimum-deployment-target 14.0 \
+       --app-icon AppIcon --output-partial-info-plist "$ICONTMP/partial.plist" >/dev/null 2>&1 && [ -f "$ICONTMP/Assets.car" ]; then
+    cp "$ICONTMP/Assets.car" "$APP/Contents/Resources/"
+  else
+    echo "make-app: actool could not compile Resources/AppIcon.icon, keeping the flat icns" >&2
+  fi
+  rm -rf "$ICONTMP"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -174,6 +188,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>SUFeedURL</key><string>${FEED_URL}</string>

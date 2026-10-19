@@ -159,10 +159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Bundle.main.bundleURL.pathExtension != "app" {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
-        }
-        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
-           let icon = NSImage(contentsOf: iconURL) {
-            NSApp.applicationIconImage = icon
+            // A bare executable has no bundle icon, so give its Dock tile the png. A bundled app
+            // keeps the one macOS draws from Assets.car, which is the Liquid Glass icon on macOS 26
+            // and later; setting the png there would replace it with a flat copy.
+            if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+               let icon = NSImage(contentsOf: iconURL) {
+                NSApp.applicationIconImage = icon
+            }
         }
         // Issue #58: if window restoration brought back only the Settings window, open the main
         // one. SettingsView asks for it as it appears; this is the fallback once launch settles.
