@@ -166,6 +166,9 @@ if [ -d "$DBDIR" ]; then mkdir -p "$APP/Contents/Resources/db-games"; cp "$DBDIR
 # files (CI's Xcode 16); actool's own icns stops at 256. The 512 px png is the copy the app loads
 # itself (the empty environment view, launcher shortcuts in ~/Applications/Highball, the Dock icon of
 # a bare SwiftPM run). A release needs Assets.car, so it never ships the flat icon by accident.
+# Xcode 26.6's actool, which builds releases, throws on Icon Composer's newer refraction effect
+# ("features": ["refractivity"], "attempt to insert nil object"), so the icon leaves it out; on
+# macOS 27 this icon draws the same without it (2026-10-19).
 cp Resources/AppIcon.icns Resources/AppIcon.png "$APP/Contents/Resources/"
 ICONTMP=$(mktemp -d)
 if xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$ICONTMP" --platform macosx --minimum-deployment-target 14.0 \

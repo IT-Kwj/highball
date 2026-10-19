@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="glassClip">
+      <rect x="362" y="224" width="300" height="560" rx="42" ry="42"/>
+    </clipPath>
+    <linearGradient id="liquidGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E3A94F"/>
+      <stop offset="100%" stop-color="#9A5E17"/>
+    </linearGradient>
+  </defs>
+  <!-- Glass clipping mask preserves the rounded base corners -->
+  <g clip-path="url(#glassClip)">
+    <!-- Flat-topped liquid body (from y=422 down to glass base at y=784) -->
+    <rect x="362" y="422" width="300" height="362" fill="url(#liquidGrad)"/>
+    <!-- Integrated fizz head band across the flat top surface -->
+    <rect x="362" y="422" width="300" height="18" fill="#F3CE8B" fill-opacity="0.85"/>
+  </g>
+</svg>
