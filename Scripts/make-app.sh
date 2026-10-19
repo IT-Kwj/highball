@@ -158,23 +158,26 @@ for f in "$RECIPES"/launchers/*.json "$RECIPES"/games/*.json "$RECIPES"/tweaks/*
 DBDIR="$(dirname "$RECIPES")/db/games"
 if [ -d "$DBDIR" ]; then mkdir -p "$APP/Contents/Resources/db-games"; cp "$DBDIR"/*.json "$APP/Contents/Resources/db-games/"; fi
 
-# App icon: the icns is the bundle's icon, the 512 px png the copy the app loads itself
-# (the empty environment view, launcher shortcuts in ~/Applications/Highball, the Dock icon of a
-# bare SwiftPM run). Resources/AppIcon.icon is the same icon in Icon Composer's format, the Liquid
-# Glass icon macOS 26 and later draw: actool compiles it into Assets.car (CFBundleIconName). macOS 14
-# and 15 keep the checked-in AppIcon.icns (CFBundleIconFile), a render of the same icon at every size
-# up to 1024 px (actool's own icns stops at 256). Without Xcode's actool only the icns ships, as before.
+# App icon: Resources/AppIcon.icon is the icon in Icon Composer's format. actool compiles it into
+# Assets.car (CFBundleIconName), which holds the Liquid Glass icon macOS 26 and later draw and flat
+# images of it at every size up to 1024 px, the ones macOS 14 and 15 should draw (assetutil --info,
+# 2026-10-19; not looked at on those systems). The checked-in AppIcon.icns (CFBundleIconFile) is a
+# render of the same icon at every size up to 1024 px, for a build without an actool that reads .icon
+# files (CI's Xcode 16); actool's own icns stops at 256. The 512 px png is the copy the app loads
+# itself (the empty environment view, launcher shortcuts in ~/Applications/Highball, the Dock icon of
+# a bare SwiftPM run). A release needs Assets.car, so it never ships the flat icon by accident.
 cp Resources/AppIcon.icns Resources/AppIcon.png "$APP/Contents/Resources/"
-if xcrun --find actool >/dev/null 2>&1; then
-  ICONTMP=$(mktemp -d)
-  if xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$ICONTMP" --platform macosx --minimum-deployment-target 14.0 \
-       --app-icon AppIcon --output-partial-info-plist "$ICONTMP/partial.plist" >/dev/null 2>&1 && [ -f "$ICONTMP/Assets.car" ]; then
-    cp "$ICONTMP/Assets.car" "$APP/Contents/Resources/"
-  else
-    echo "make-app: actool could not compile Resources/AppIcon.icon, keeping the flat icns" >&2
-  fi
-  rm -rf "$ICONTMP"
+ICONTMP=$(mktemp -d)
+if xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$ICONTMP" --platform macosx --minimum-deployment-target 14.0 \
+     --app-icon AppIcon --output-partial-info-plist "$ICONTMP/partial.plist" >"$ICONTMP/actool.log" 2>&1 && [ -f "$ICONTMP/Assets.car" ]; then
+  cp "$ICONTMP/Assets.car" "$APP/Contents/Resources/"
+elif [ "$CONFIG" = release ]; then
+  cat "$ICONTMP/actool.log" >&2; rm -rf "$ICONTMP"
+  echo "error: actool could not compile Resources/AppIcon.icon; a release needs Xcode 26 or later" >&2; exit 1
+else
+  echo "note: actool could not compile Resources/AppIcon.icon, so this debug build has only the flat icns; it needs Xcode 26 or later"
 fi
+rm -rf "$ICONTMP"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
