@@ -3,7 +3,7 @@
   "id": "arm64-wine11.18-r3",
   "displayName": "Wine 11.18 native arm64 (preview) r3",
   "arch": "arm64",
-  "minMacOS": "15.0",
+  "minMacOS": "26.5",
   "requires": [],
   "channel": "preview",
   "direct3D9": "wined3d",

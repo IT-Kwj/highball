@@ -8,8 +8,8 @@ final class EngineChannelsTests: XCTestCase {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    private func manifest(id: String, channel: String?) throws -> EngineManifest {
-        var json: [String: Any] = ["id": id, "displayName": id, "arch": "arm64", "minMacOS": "26.5", "components": [String: Any]()]
+    private func manifest(id: String, channel: String?, minMacOS: String = "26.5") throws -> EngineManifest {
+        var json: [String: Any] = ["id": id, "displayName": id, "arch": "arm64", "minMacOS": minMacOS, "components": [String: Any]()]
         if let channel { json["channel"] = channel }
         return try JSONDecoder().decode(EngineManifest.self, from: JSONSerialization.data(withJSONObject: json))
     }
@@ -99,6 +99,26 @@ final class EngineChannelsTests: XCTestCase {
         XCTAssertEqual(game.previewRevisionToOffer(current: r3Installed, known: [r3, r5], macOS: "27.0")?.id, "arm64-line-r5")
         // A Wine 10 or Wine 11 environment never moves on its own, whatever its recipe pins.
         XCTAssertNil(try recipe(engine: "x64-line-r24").previewRevisionToOffer(current: x64, known: [x64, x64Later], macOS: "27.0"))
+    }
+
+    /// The arm64 line needs macOS 26.5 and the D3DMetal 4 revisions macOS 27. On an older macOS Play says so before any
+    /// question or download, instead of offering an engine that cannot start there (2026-10-19).
+    func testARecipeWhoseEngineNeedsANewerMacOSSaysWhichOne() throws {
+        let r5 = try manifest(id: "arm64-line-r5", channel: "preview", minMacOS: "26.5")
+        let game = try recipe(engine: "arm64-line-r5")
+        XCTAssertEqual(game.engineMacOSFloor(bundled: [r5], macOS: "26.4.1"), "26.5")
+        XCTAssertEqual(game.engineMacOSFloor(bundled: [r5], macOS: "15.7"), "26.5")
+        XCTAssertNil(game.engineMacOSFloor(bundled: [r5], macOS: "26.5"))
+        XCTAssertNil(game.engineMacOSFloor(bundled: [r5], macOS: "27.0.0"))
+        let d3dmetal4 = try manifest(id: "x64-line-r18", channel: nil, minMacOS: "27.0")
+        let d3dmetal4Later = try manifest(id: "x64-line-r24", channel: nil, minMacOS: "27.0")
+        XCTAssertEqual(try recipe(engine: "x64-line-r18").engineMacOSFloor(bundled: [d3dmetal4, d3dmetal4Later], macOS: "26.6"), "27.0")
+        XCTAssertNil(try recipe(engine: "x64-line-r18").engineMacOSFloor(bundled: [d3dmetal4, d3dmetal4Later], macOS: "27.0"))
+        // A later revision that runs here is enough.
+        let r6 = try manifest(id: "arm64-line-r6", channel: "preview", minMacOS: "26.0")
+        XCTAssertNil(game.engineMacOSFloor(bundled: [r5, r6], macOS: "26.4"))
+        // A pin the app does not ship keeps its own answer (engineUnknown), and no pin needs nothing.
+        XCTAssertNil(try recipe(engine: "arm64-line-r9").engineMacOSFloor(bundled: [r5], macOS: "15.0"))
     }
 
     func testEveryEngineThePlayersHaveTodayHasNoChannel() throws {

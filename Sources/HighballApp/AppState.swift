@@ -410,11 +410,19 @@ final class AppState {
         return recipe
     }
 
+    /// The game's own recipe from the database, whatever the channel of the engine it names (fixRecipe hides a recipe
+    /// pinned to a hidden engine), for what Play checks before anything else. An opt-in recipe stays the page's
+    /// business, as everywhere.
+    func gameRecipe(for item: LibraryItem) -> HighballKit.Recipe? {
+        guard let entry = gameDB.entry(for: item), let recipe = Self.recipe(entry.id), recipe.kind == .game, !recipe.isOptIn
+        else { return nil }
+        return recipe
+    }
+
     /// The preview engine a game's recipe pins while this Mac does not see it (EngineChannels.previewToOffer): Play
     /// asks the player before anything changes. An opt-in recipe stays the page's business, as everywhere.
     func previewOffer(for item: LibraryItem) -> (recipe: HighballKit.Recipe, manifest: EngineManifest)? {
-        guard let entry = gameDB.entry(for: item), let recipe = Self.recipe(entry.id), recipe.kind == .game, !recipe.isOptIn
-        else { return nil }
+        guard let recipe = gameRecipe(for: item) else { return nil }
         let defaults = UserDefaults.standard
         guard let manifest = EngineChannels.previewToOffer(pin: recipe.engine, bundled: Self.bundledManifests,
                                                            beta: defaults.bool(forKey: UpdateChannels.betaDefaultsKey),
@@ -438,6 +446,16 @@ final class AppState {
         guard let bottleName = item.bottleName,
               let found = bottles.first(where: { $0.name == bottleName }) else { return }
         var bottle = found
+        // A recipe whose engine needs a newer macOS than this Mac runs, on every revision the app ships (the arm64 line
+        // needs macOS 26.5, the D3DMetal 4 revisions macOS 27): say so before any question or download. Until 0.10.21
+        // Play offered such an engine on any macOS and nothing stopped its install. An environment already on that
+        // engine plays as it is.
+        if let recipe = gameRecipe(for: item), let id = recipe.engine,
+           let floor = recipe.engineMacOSFloor(bundled: Self.bundledManifests),
+           !(engine(for: bottle).map { EngineManifest.isAtOrAfter(current: $0.manifest.id, wanted: id) } ?? false) {
+            pendingMacOS = (recipe, floor, item, bottle, renderer)
+            return
+        }
         // A recipe pinned to a preview engine this Mac does not see yet: before 0.10.19 Play launched the game here
         // as if the recipe did not exist, which for Microsoft Flight Simulator 2024 was a Rosetta engine it cannot
         // start on. An environment already on that engine counts as the player's choice, and so does one on an
@@ -1480,6 +1498,17 @@ final class AppState {
         guard let pending = pendingPreview else { return }
         pendingPreview = nil
         appendLog("\(pending.item.title): its fix needs the \(pending.manifest.id) preview engine; playing without it.")
+        launch(pending.item, in: pending.bottle, renderer: pending.renderer)
+    }
+
+    /// A game whose recipe's engine needs a newer macOS than this Mac runs, asked from Play (Recipe.engineMacOSFloor).
+    var pendingMacOS: (recipe: HighballKit.Recipe, floor: String, item: LibraryItem, bottle: Bottle, renderer: Renderer?)?
+
+    /// The macOS ask's way out that keeps playing: on the current engine, as before the ask existed.
+    func playWithoutMacOSFix() {
+        guard let pending = pendingMacOS else { return }
+        pendingMacOS = nil
+        appendLog("\(pending.item.title): its fix needs macOS \(pending.floor) or later; playing without it.")
         launch(pending.item, in: pending.bottle, renderer: pending.renderer)
     }
 

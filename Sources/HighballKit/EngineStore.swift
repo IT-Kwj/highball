@@ -232,6 +232,12 @@ public struct EngineStore: Sendable {
         progress: DownloadProgress? = nil
     ) async throws -> InstalledEngine {
         try paths.ensure()
+        // An engine measured only on a newer macOS is neither offered nor installed on an older one (highball#85).
+        // The engine picker and the updates filtered on it, but Play's engine ask could still install one: the arm64
+        // line on macOS 26.4, where it cannot start (2026-10-19).
+        guard manifest.runs(onMacOS: EngineManifest.currentMacOS) else {
+            throw HighballError.failed("The \(manifest.displayName) engine needs macOS \(manifest.minMacOS) or later, and this Mac runs macOS \(EngineManifest.currentMacOS).")
+        }
         // An arm64 engine runs through the signed loader in Highball.app and nothing else, so
         // without it the download would only end in an engine that cannot start (WineLoaderHelper).
         if manifest.isNativeARM64, WineLoaderHelper.locate() == nil {

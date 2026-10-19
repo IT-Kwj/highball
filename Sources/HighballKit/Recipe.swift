@@ -678,6 +678,18 @@ public extension Recipe {
         return offer
     }
 
+    /// The macOS version this recipe's engine needs when no revision the app ships of it runs on `macOS`: the arm64
+    /// line needs features Apple added in macOS 26.5 (4 KB pages for a process, x86 memory ordering per thread), and
+    /// the D3DMetal 4 revisions need macOS 27. Play says so before any question or download, where 0.10.20 offered such
+    /// an engine on any macOS and nothing stopped its install. Nil when a shipped revision runs here, when the recipe
+    /// names no engine, or when the app does not ship it (engineUnknown answers that). `bundled` is every manifest the
+    /// app ships, hidden channels included.
+    func engineMacOSFloor(bundled: [EngineManifest], macOS: String = EngineManifest.currentMacOS) -> String? {
+        guard let id = engine, let wanted = bundled.first(where: { $0.id == id }) else { return nil }
+        let revisions = bundled.filter { EngineManifest.satisfies(current: $0, wanted: wanted) }
+        return revisions.contains { $0.runs(onMacOS: macOS) } ? nil : wanted.minMacOS
+    }
+
     /// The engine this recipe names when no manifest this build ships carries it and the
     /// environment is not already on it or a later revision of its line: the fix reached the
     /// database before the Highball that ships its engine (The Last Flame's r11 pin,

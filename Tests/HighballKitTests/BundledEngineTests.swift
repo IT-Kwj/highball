@@ -27,6 +27,18 @@ final class BundledEngineTests: XCTestCase {
         }
     }
 
+    /// The arm64 line rests on what Apple added in macOS 26.5 (4 KB pages for a process, the x18 register, x86 memory
+    /// ordering per thread), so no arm64 manifest may say it runs on anything older: 0.10.20 shipped r1, r3 and r5 with
+    /// a floor of 15.0 and Play offered them on any macOS.
+    func testEveryArm64EngineNeedsMacOS26_5() throws {
+        let arm64 = try manifests().filter(\.isNativeARM64)
+        XCTAssertFalse(arm64.isEmpty)
+        for m in arm64 {
+            XCTAssertFalse(m.runs(onMacOS: "26.4.9"), "\(m.id) says it runs below macOS 26.5")
+            XCTAssertTrue(m.runs(onMacOS: "26.5"), "\(m.id) refuses macOS 26.5")
+        }
+    }
+
     func testR6CarriesGPTK4D3DMetalOnMacOS27WithTheMetal4BackendOff() throws {
         let r6 = try XCTUnwrap(try manifests().first { $0.id == "x64-sikarugir10.0_6-r6" }, "r6 manifest missing")
         XCTAssertEqual(r6.minMacOS, "27.0")

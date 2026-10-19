@@ -84,10 +84,20 @@ extension GamePageCopy {
                       recipe.title, revisionName(manifest), revisionName(current), download)
     }
 
-    /// One sentence when the recipe names a memory floor this Mac is under, empty otherwise.
+    /// A game whose recipe's engine needs a newer macOS than this Mac runs (AppState.pendingMacOS). `current` is
+    /// "major.minor.patch", shown without a patch of 0.
+    static func macOSAsk(recipe: HighballKit.Recipe, floor: String, current: String) -> String {
+        let shown = current.hasSuffix(".0") ? String(current.dropLast(2)) : current
+        return String(format: L("%@'s fix runs on an engine that needs macOS %@ or later, and this Mac runs macOS %@. Once macOS is updated, Play sets it up. You can also play without the fix, as before."),
+                      recipe.title, floor, shown)
+    }
+
+    /// One sentence when the recipe names a memory floor this Mac is under, empty otherwise. The floor is the memory
+    /// the game was tested with, so the sentence says that rather than a hard requirement: smaller Macs are untested,
+    /// not ruled out (2026-10-19).
     static func memoryNote(recipe: HighballKit.Recipe, memoryMB: Int) -> String {
         guard let short = recipe.memoryShortfall(memoryMB: memoryMB) else { return "" }
-        return " " + String(format: L("It needs about %d GB of memory and this Mac has %d GB, so it is unlikely to run here."),
+        return " " + String(format: L("It was tested on Macs with %d GB of memory and this Mac has %d GB, so it may not run well here."),
                             short.needGB, short.haveGB)
     }
 

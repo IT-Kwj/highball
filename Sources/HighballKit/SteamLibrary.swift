@@ -44,6 +44,11 @@ public struct SteamGame: Identifiable, Sendable, Hashable {
     }
     /// StateFlags 4 = fully installed; anything else is updating/downloading/broken.
     public var isReady: Bool { stateFlags == 4 }
+    /// Every file of the installed build is in its folder: fully installed, at most with an update waiting (StateFlags
+    /// 6, update required). Steam stages an update's files elsewhere until it applies them, so such a folder is whole,
+    /// and a Steam that finds its record updates it as it would any copy. Anything else (downloading, updating, paused,
+    /// files missing) is not.
+    public var isFullyInstalled: Bool { stateFlags & 4 != 0 && stateFlags & ~6 == 0 }
 
     /// Steam CDN artwork (no key needed).
     public var headerImage: URL { URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(appid)/header.jpg")! }

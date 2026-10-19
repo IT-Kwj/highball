@@ -323,6 +323,11 @@ enum L10n {
             "%@ nécessite une configuration unique pour fonctionner comme vérifié.",
         "Install the fix first": "Installer d'abord le correctif",
         "Play without it": "Jouer sans",
+        "%@ needs macOS %@": "%@ nécessite macOS %@",
+        "%@'s fix runs on an engine that needs macOS %@ or later, and this Mac runs macOS %@. Once macOS is updated, Play sets it up. You can also play without the fix, as before.":
+            "Le correctif de %@ utilise un moteur qui nécessite macOS %@ ou plus récent, et ce Mac utilise macOS %@. Une fois macOS mis à jour, Jouer le configure. Vous pouvez aussi jouer sans le correctif, comme avant.",
+        "It was tested on Macs with %d GB of memory and this Mac has %d GB, so it may not run well here.":
+            "Il a été testé sur des Mac avec %d Go de mémoire et ce Mac en a %d, il risque donc de mal fonctionner ici.",
         "A newer preview engine for %@": "Un moteur en préversion plus récent pour %@",
         "Play on %@": "Jouer sur %@",
         "%@ is now verified on %@ of its preview engine, and this environment still runs %@. Moving the environment switches it there%@ and keeps the game and everything else installed. The Windows setup re-runs, which takes a minute or two. Highball asks this once, and the environment's Engine setting can move it later.":

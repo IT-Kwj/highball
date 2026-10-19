@@ -229,6 +229,7 @@ struct ContentView: View {
         .updateAsk(state)
         .previewAsk(state)
         .previewMoveAsk(state)
+        .macOSAsk(state)
         .uninstallAsk(state)
         .rendererTrialAsk(state)
         .modesetTrialAsk(state)
@@ -446,6 +447,17 @@ private extension View {
             Button(L("Not now"), role: .cancel) { state.pendingPreview = nil }
         } message: { pending in
             Text(GamePageCopy.previewAsk(recipe: pending.recipe, manifest: pending.manifest))
+        }
+    }
+    /// A game whose recipe's engine needs a newer macOS than this Mac runs (AppState.pendingMacOS).
+    @MainActor func macOSAsk(_ state: AppState) -> some View {
+        self.alert(state.pendingMacOS.map { String(format: L("%@ needs macOS %@"), $0.recipe.title, $0.floor) } ?? "",
+                   isPresented: .init(get: { state.pendingMacOS != nil }, set: { if !$0 { state.pendingMacOS = nil } }),
+                   presenting: state.pendingMacOS) { _ in
+            Button(L("Play without it")) { state.playWithoutMacOSFix() }
+            Button(L("Not now"), role: .cancel) { state.pendingMacOS = nil }
+        } message: { pending in
+            Text(GamePageCopy.macOSAsk(recipe: pending.recipe, floor: pending.floor, current: EngineManifest.currentMacOS))
         }
     }
     /// An environment on an earlier revision of the preview line its game's recipe pins (AppState.pendingPreviewMove).
@@ -736,6 +748,7 @@ struct ErrorDetailsSheet: View {
 @MainActor func debugAsks(_ state: AppState) -> String {
     "engine ask \(state.pendingEngine.map { "for \($0.manifest.id)" } ?? "not raised"), "
         + "preview ask \(state.pendingPreview.map { "for \($0.manifest.id)" } ?? "not raised"), "
-        + "preview move \(state.pendingPreviewMove.map { "from \($0.current.id) to \($0.manifest.id)" } ?? "not raised")"
+        + "preview move \(state.pendingPreviewMove.map { "from \($0.current.id) to \($0.manifest.id)" } ?? "not raised"), "
+        + "macOS ask \(state.pendingMacOS.map { "for macOS \($0.floor)" } ?? "not raised")"
 }
 #endif

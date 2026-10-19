@@ -53,6 +53,22 @@ final class SteamGameCarryOverTests: XCTestCase {
         guard case .skipped = SteamGameCarryOver.carry(game, into: dest) else { return XCTFail("a game Steam is still writing must not be cloned") }
         XCTAssertFalse(FileManager.default.fileExists(atPath: dest.appending(path: "common/MSFS2024").path))
         XCTAssertFalse(SteamGameCarryOver.canCarry(game, toBottlesRoot: tmp))
+        // Paused, or files missing, on top of an installed build: not whole either.
+        for state in [4 | 512, 4 | 32, 4 | 2 | 1024] {
+            XCTAssertFalse(SteamGameCarryOver.canCarry(try library("old\(state)", state: state), toBottlesRoot: tmp), "state \(state)")
+        }
+    }
+
+    /// Fully installed with an update waiting (StateFlags 6): the files of the installed build are all there, so the game
+    /// comes along with its record as it is, and the new environment's Steam downloads only the update.
+    func testAGameWithAnUpdateWaitingComesAlongAndKeepsItsRecord() throws {
+        let game = try library("old", state: 6)
+        let dest = try steamapps("new")
+        XCTAssertTrue(SteamGameCarryOver.canCarry(game, toBottlesRoot: tmp))
+        XCTAssertEqual(SteamGameCarryOver.carry(game, into: dest), .carried)
+        XCTAssertEqual(try String(contentsOf: dest.appending(path: "common/MSFS2024/Packages/one.fsarchive"), encoding: .utf8), "package")
+        let record = try String(contentsOf: dest.appending(path: "appmanifest_2537590.acf"), encoding: .utf8)
+        XCTAssertTrue(record.contains("\"StateFlags\" \"6\""), "the record still says an update is required")
     }
 
     func testANewEnvironmentThatHasTheGameAlreadyIsLeftAlone() throws {

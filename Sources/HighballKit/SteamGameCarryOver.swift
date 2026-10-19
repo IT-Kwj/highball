@@ -17,8 +17,10 @@ public enum SteamGameCarryOver {
 
     /// Whether `game` can come along to a new environment made under `bottlesRoot`: fully installed, its folder
     /// there, and on the same volume, which a clone needs (a library on an external drive is not copied in full).
+    /// A game with an update waiting comes along too, and the new environment's Steam downloads only the update,
+    /// where 0.10.19 and 0.10.20 left it behind and the new environment downloaded the whole game.
     public static func canCarry(_ game: SteamGame, toBottlesRoot bottlesRoot: URL) -> Bool {
-        guard game.isReady, let folder = game.installFolder?.resolvingSymlinksInPath(),
+        guard game.isFullyInstalled, let folder = game.installFolder?.resolvingSymlinksInPath(),
               FileManager.default.fileExists(atPath: folder.path) else { return false }
         return sameVolume(folder, bottlesRoot)
     }
@@ -37,7 +39,7 @@ public enum SteamGameCarryOver {
     /// Steam on a shared folder (a cloned Steam once downgraded a shared Forza Horizon 6 install, 2026-10-06).
     public static func carry(_ game: SteamGame, into destSteamapps: URL,
                              clone: (URL, URL) throws -> Void = SteamGameCarryOver.cloneTree) -> Outcome {
-        guard game.isReady else { return .skipped("it is not fully installed there (Steam state \(game.stateFlags))") }
+        guard game.isFullyInstalled else { return .skipped("it is not fully installed there (Steam state \(game.stateFlags))") }
         guard let root = game.libraryRoot, let folder = game.installFolder?.resolvingSymlinksInPath() else {
             return .skipped("its install folder is unknown")
         }
