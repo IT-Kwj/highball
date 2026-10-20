@@ -2028,6 +2028,19 @@ final class AppState {
         }
     }
 
+    /// Wine's Game Controllers panel (joy.cpl) for an environment: every joystick, gamepad, yoke or wheel Wine sees
+    /// there, with a live test of its buttons and axes. A player whose game shows only mouse and keyboard can tell
+    /// whether the device reaches Wine at all, where highball-db#574 took a diagnosis to learn that the arm64 engines
+    /// before r6 started no controller bus.
+    func openControllerTest(in bottle: Bottle) {
+        guard let engine = engine(for: bottle) else { return }
+        let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+        appendLog("\(bottle.name): opening Game Controllers")
+        Task.detached {
+            _ = try? await runner.run(["control", "joy.cpl"], renderer: .wined3d, label: "joy.cpl")
+        }
+    }
+
     // MARK: Install funnel (UX plan 0.7)
 
     /// Local only. Nothing leaves the Mac unless the person reads the aggregate and sends it.
