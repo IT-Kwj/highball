@@ -316,6 +316,20 @@ public struct Recipe: Codable, Sendable, Identifiable {
         public var min: Int?
     }
 
+    /// A tweak made only of registry values (and notes) can be taken back off: deleting each value it
+    /// set returns Wine to its own default for it. "Controllers through SDL" asked for it, since a
+    /// DualSense gives no input in some games with it on and the app could only install it.
+    public var isRemovable: Bool {
+        kind == .tweak && !registryValues.isEmpty && steps.allSatisfy {
+            switch $0 { case .registry, .note: return true; default: return false }
+        }
+    }
+
+    /// The registry values this recipe sets, key and name.
+    public var registryValues: [(key: String, name: String)] {
+        steps.compactMap { if case let .registry(key, name, _, _) = $0 { return (key, name) } else { return nil } }
+    }
+
     /// True when any marker is present in the bottle. Recipes without markers report false; the
     /// caller still knows whether the recipe ran.
     public func isInstalled(in bottle: Bottle) -> Bool {

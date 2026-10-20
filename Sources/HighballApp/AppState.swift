@@ -1567,7 +1567,7 @@ final class AppState {
     func createEnvironment(for recipe: HighballKit.Recipe, on manifest: EngineManifest, item: LibraryItem? = nil) {
         pendingEngine = nil
         guard !busy else { return }
-        let name = BottleStore.freeName(recipe.title, taken: Set(bottles.map(\.name)))
+        let name = BottleStore.freeName(BottleStore.safeName(fromTitle: recipe.title), taken: Set(bottles.map(\.name)))
         let accepted = Set(engines.flatMap { $0.manifest.acceptedLicenses ?? [] })
         let done: DoneState
         // The game installed where Play started comes along as a clone when it can (SteamGameCarryOver): no second
@@ -2735,7 +2735,18 @@ final class AppState {
                 switch outcome {
                 case .failure(let error): throw error
                 case .success(let result):
-                    if result.crashedEarly, !stopRequested { crashed(result); return false }
+                    if result.crashedEarly, !stopRequested {
+                        // A program that hands itself to its launcher exits at once with an error code
+                        // and comes back moments later, started by the launcher: Star Wars Galaxy of
+                        // Heroes through the EA app read as a crash and Highball offered another mode
+                        // for a game that was running fine (highball-db#566). It gets 20 s to appear.
+                        for _ in 0..<10 {
+                            if await started() { box.handedOff = true; return true }
+                            if stopRequested { return false }
+                            try await Task.sleep(for: .seconds(2))
+                        }
+                        crashed(result); return false
+                    }
                     if exitEndsWait { return false }
                     exited = true
                 }
@@ -3089,6 +3100,27 @@ final class AppState {
         let ids = Set(Self.tweakRecipes().filter { $0.isInstalled(in: bottle) }.map(\.id))
         installedTweaksCache[bottle.name] = (modified, ids)
         return ids.contains(recipe.id)
+    }
+
+    /// Takes a registry-only tweak back off an environment: each value it set is deleted, so Wine
+    /// uses its own default again, and the environment stops if nothing runs in it, since drivers
+    /// such as the controller bus read their options when the environment starts. A DualSense player
+    /// with "Controllers through SDL" installed had no way back short of regedit (Discord, 2026-10-19).
+    func removeTweak(_ recipe: HighballKit.Recipe, from bottle: Bottle) {
+        guard recipe.isRemovable, let engine = engine(for: bottle) else { return }
+        runBusy(String(format: L("Removing %@"), recipe.title)) { [self] in
+            let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+            for value in recipe.registryValues { try await runner.regDelete(key: value.key, name: value.name) }
+            let stopped = ProcessTable.liveServer(forPrefix: bottle.url) != nil && ProcessTable.isIdle(prefix: bottle.url)
+            if stopped { _ = try? runner.kill() }
+            await MainActor.run {
+                var copy = self.bottles.first { $0.name == bottle.name } ?? bottle
+                copy.settings.recipes.removeAll { $0 == recipe.id }
+                self.update(copy)
+                self.appendLog("\(recipe.title) removed from \(bottle.name): its registry values are gone, so Wine uses its defaults again"
+                               + (stopped ? "; the idle environment stopped so its next start reads them." : ". Stop the environment once so programs see it."))
+            }
+        }
     }
 
     /// A runtime a game's own first-run setup installed (Steam runs the Visual C++ redist for

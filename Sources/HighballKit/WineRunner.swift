@@ -91,6 +91,15 @@ public struct WineRunner: Sendable {
     /// GitHub issue, and a bottle's env can hold personal paths or tokens. Without it a report
     /// cannot separate "the config was never delivered" from "the config was delivered and did
     /// not help", which is exactly where issue #21 stalled for two rounds.
+    static let headerSwitchPrefixes = ["DXMT_", "D3DM_", "SDL_", "MVK_", "HB_", "WINE_NO_DELAYED_FORK"]
+
+    /// The header lines for those switches, in name order, short values only.
+    static func headerSwitchLines(_ env: [String: String]) -> String {
+        env.keys.sorted().filter { key in headerSwitchPrefixes.contains { key.hasPrefix($0) } }
+            .compactMap { key in env[key].flatMap { $0.count <= 200 ? "# \(key)=\($0)\n" : nil } }
+            .joined()
+    }
+
     static func launchHeader(engine: InstalledEngine, bottle: Bottle, renderer: Renderer,
                              env: [String: String], args: [String]) -> String {
         var out = "# gin \(engine.id) bottle=\(bottle.name) renderer=\(renderer)\n"
@@ -109,6 +118,10 @@ public struct WineRunner: Sendable {
         for key in ["WINEDLLPATH_PREPEND", "WINEDLLOVERRIDES", "ROSETTA_ADVERTISE_AVX", "MTL_HUD_ENABLED", "CX_FWD_COMPAT_GL_CTX", "DXVK_CONFIG_FILE", "DXVK_LOG_PATH", "DXVK_CONFIG", "VKD3D_SHADER_MODEL", "VKD3D_FEATURE_LEVEL", "VKD3D_CONFIG", "VKD3D_SHADER_CACHE_PATH", "LSFGM_MULTIPLIER", "LSFGM_PACING_MODE", "LSFGM_FLOW_SCALE", "LSFGM_DLL_PATH"] {
             if let value = env[key] { out += "# \(key)=\(value)\n" }
         }
+        // Renderer and controller switches a player or a recipe sets: settings, never personal, and
+        // a report can't tell whether one was set without them (highball#371 asked whether
+        // DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN was in the environment, and the log couldn't say).
+        out += headerSwitchLines(env)
         // The generated dxvk.conf decides per-game behaviour, so quote it rather than making the
         // reader ask for a second file that Repair may already have rewritten.
         if env["DXVK_CONFIG_FILE"] != nil,
@@ -289,6 +302,7 @@ public struct WineRunner: Sendable {
     public func start(_ executable: URL, arguments: [String] = [], renderer: Renderer? = nil, extraEnvironment: [String: String] = [:], workingDirectory: URL? = nil, headerNote: String? = nil, program: String? = nil, onOutput: (@Sendable (String) -> Void)? = nil) async throws -> LaunchResult {
         // First, while no server holds the hive: the syncs below start the environment's server.
         let linkedSteamView = (try? SteamRegistryView.repair(prefix: bottle.url)) == true
+        let prefixVersion = Self.prefixWindowsVersion(prefix: bottle.url)
         await syncMacFontSubstitutes()
         await syncDllOverridesRegistry()
         await syncEngineAppDefaults()
@@ -296,6 +310,15 @@ public struct WineRunner: Sendable {
         var note = headerNote
         if linkedSteamView {
             let text = "linked HKCU\\Software\\Wow6432Node\\Valve to Software\\Valve so 32-bit lookups find Steam (Rockstar launcher error 113)"
+            onOutput?("note: \(text)")
+            note = [note, text].compactMap { $0 }.joined(separator: "; ")
+        }
+        // highball#396: winetricks verbs and some installers set the prefix to Windows 7 and leave it.
+        // Steam then warned it would stop running on Windows 7 and RDR2 refused to start, while the
+        // environment's setting, and the header below, still said Windows 11. The setting wins.
+        let wantedVersion = bottle.settings.windowsVersion.rawValue
+        if let found = prefixVersion, found != wantedVersion, (try? await setWindowsVersion(bottle.settings.windowsVersion)) != nil {
+            let text = "the prefix reported \(found), set back to \(wantedVersion) as the environment's settings say"
             onOutput?("note: \(text)")
             note = [note, text].compactMap { $0 }.joined(separator: "; ")
         }
@@ -758,6 +781,34 @@ public struct WineRunner: Sendable {
 
     public func setWindowsVersion(_ v: WindowsVersion) async throws {
         _ = try await run(["winecfg", "-v", v.rawValue], renderer: .wined3d, label: "winecfg")
+    }
+
+    /// The Windows version a prefix reports, from its registry files, as winecfg names it, or nil
+    /// when the files can't be read or say nothing. Wine takes HKCU\Software\Wine's Version first
+    /// (winetricks and older winecfg write it) and otherwise the machine's CurrentBuild, which
+    /// `winecfg -v` writes while it removes the per-user value.
+    public static func prefixWindowsVersion(prefix: URL) -> String? {
+        let user = (try? String(contentsOf: prefix.appending(path: "user.reg"), encoding: .utf8)) ?? ""
+        let system = (try? String(contentsOf: prefix.appending(path: "system.reg"), encoding: .utf8)) ?? ""
+        return prefixWindowsVersion(userReg: user, systemReg: system)
+    }
+
+    static func prefixWindowsVersion(userReg: String, systemReg: String) -> String? {
+        func unquoted(_ raw: String) -> String { raw.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")).lowercased() }
+        if let raw = RegistryText.value(in: userReg, key: #"Software\Wine"#, name: "Version"), !unquoted(raw).isEmpty {
+            return unquoted(raw)
+        }
+        guard let raw = RegistryText.value(in: systemReg, key: #"Software\Microsoft\Windows NT\CurrentVersion"#, name: "CurrentBuild"),
+              let build = Int(unquoted(raw)) else { return nil }
+        switch build {
+        case 22000...: return "win11"
+        case 10240..<22000: return "win10"
+        case 9600: return "win81"
+        case 9200: return "win8"
+        case 7600, 7601: return "win7"
+        case 6000...6002: return "vista"
+        default: return "build \(build)"
+        }
     }
 }
 

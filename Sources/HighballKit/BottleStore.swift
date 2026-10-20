@@ -43,6 +43,33 @@ public struct BottleStore: Sendable {
         return candidate
     }
 
+    /// A name `nameProblem` accepts, made from a game's title, for an environment Highball creates
+    /// for that game. A fifth of the database's titles carry a character Windows forbids in paths,
+    /// mostly a colon, and "Onimusha: Way of the Sword Benchmark" refused to become an environment
+    /// (highball#391). A colon before a space reads as " - ", any other colon, slash or bar as "-",
+    /// the other forbidden characters and control characters go, spaces close up, leading and
+    /// trailing dots and dashes go, and the name stops at 60 characters so freeName's " 2" still fits.
+    public static func safeName(fromTitle title: String) -> String {
+        let chars = Array(title)
+        var out = ""
+        for (i, ch) in chars.enumerated() {
+            if ch.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) { out += " "; continue }
+            switch ch {
+            case ":": out += (i + 1 < chars.count && chars[i + 1] == " ") ? " -" : "-"
+            case "/", "\\", "|": out += "-"
+            case "*", "?", "\"", "<", ">": continue
+            default: out.append(ch)
+            }
+        }
+        func tidy(_ s: String) -> String {
+            s.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .-"))
+        }
+        var name = tidy(out)
+        if name.count > 60 { name = tidy(String(name.prefix(60))) }
+        return name.isEmpty ? "Game" : name
+    }
+
     public static func nameProblem(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return "The bottle name is empty." }
