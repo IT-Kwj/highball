@@ -5,6 +5,13 @@
     <link>https://github.com/gauthierpiarrette/highball</link>
     <description>Run Windows games on Apple Silicon.</description>
     <item>
+      <title>Highball 0.10.22</title>
+      <description><![CDATA[<p>Controllers now reach games on the native arm64 preview engine. On engines r1 to r5, Wine's controller support never finished starting, so Microsoft Flight Simulator 2024 saw no joystick, yoke, throttle or pedals, only mouse and keyboard. Press Play on the game to get the new revision, r6.</p><ul><li>A new app icon in Icon Composer's format, so macOS 26 and later draw it as a Liquid Glass icon. It's the work of @hayden9002, thank you Hayden!</li></ul>]]></description>
+      <pubDate>Tue, 20 Oct 2026 14:50:19 +0200</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/gauthierpiarrette/highball/releases/download/v0.10.22/Highball-0.10.22.zip" sparkle:version="0.10.22" sparkle:shortVersionString="0.10.22" sparkle:edSignature="0qgN/NPOgOUciF9ipa3g20MXvC8MIMH/9oh0A9QK6TlGcXc+YdMQ5w7dPvgKbMNQJ54FkQWZsOJsZE403lBXBA==" length="7658975" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>Highball 0.10.21</title>
       <description><![CDATA[<p>Play now says when a game's fix needs a newer macOS, before any question or download. Microsoft Flight Simulator 2024's engine needs macOS 26.5 or later, and Forza Horizon 6's needs macOS 27.</p><ul><li>A game with a Steam update waiting comes along to a new environment as a clone, so only the update downloads.</li><li>The memory note says what a game was tested with, rather than what it needs.</li></ul>]]></description>
       <pubDate>Mon, 19 Oct 2026 15:05:34 +0200</pubDate>
