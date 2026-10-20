@@ -593,6 +593,9 @@ struct EnvironmentSettingsPage: View {
                                     let live = state.bottles.first { $0.name == bottle.name } ?? bottle
                                     if live.settings.recipes.contains(r.id) || state.tweakIsInstalled(r, in: live) {
                                         Label(L("Installed"), systemImage: "checkmark.circle.fill").foregroundStyle(.green).labelStyle(.titleAndIcon)
+                                        if r.isRemovable {
+                                            Button(L("Remove")) { state.removeTweak(r, from: live) }.controlSize(.small).disabled(state.busy)
+                                        }
                                     } else {
                                         Button(L("Install")) {
                                             state.applyRecipe(r.id, to: state.bottles.first { $0.name == bottle.name } ?? bottle)

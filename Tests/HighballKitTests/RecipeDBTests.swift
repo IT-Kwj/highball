@@ -39,6 +39,28 @@ final class RecipeDBTests: XCTestCase {
         XCTAssertTrue(recipe.isInstalled(in: bottle), "the real runtime counts")
     }
 
+    /// highball#391: every title in the database and every recipe's title makes a usable
+    /// environment name, a fifth of them through BottleStore.safeName's replacements.
+    func testEveryTitleMakesAnEnvironmentName() throws {
+        guard FileManager.default.fileExists(atPath: dbRoot.appending(path: "db/games").path) else {
+            throw XCTSkip("no highball-db checkout beside the repo and no .build/highball-db clone")
+        }
+        var titles: [String] = []
+        for dir in ["db/games", "recipes/games", "recipes/launchers", "recipes/tweaks"] {
+            let files = (try? FileManager.default.contentsOfDirectory(at: dbRoot.appending(path: dir), includingPropertiesForKeys: nil)) ?? []
+            for f in files where f.pathExtension == "json" {
+                if let o = try? JSONSerialization.jsonObject(with: Data(contentsOf: f)) as? [String: Any],
+                   let t = o["title"] as? String { titles.append(t) }
+            }
+        }
+        XCTAssertGreaterThan(titles.count, 400)
+        for t in titles {
+            let name = BottleStore.safeName(fromTitle: t)
+            XCTAssertNil(BottleStore.nameProblem(name), "\(t) -> \(name)")
+            XCTAssertNil(BottleStore.nameProblem(BottleStore.freeName(name, taken: [name])), "\(t) with a suffix")
+        }
+    }
+
     func testAllShippedRecipesDecode() throws {
         let recipes = dbRoot.appending(path: "recipes")
         guard FileManager.default.fileExists(atPath: recipes.path) else {

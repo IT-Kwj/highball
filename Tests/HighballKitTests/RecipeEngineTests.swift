@@ -215,4 +215,24 @@ final class RecipeEngineTests: XCTestCase {
         XCTAssertEqual(BottleStore.freeName("EA app", taken: ["EA app"]), "EA app 2")
         XCTAssertEqual(BottleStore.freeName("EA app", taken: ["EA app", "EA app 2"]), "EA app 3")
     }
+
+    /// highball#391: a new environment for "Onimusha: Way of the Sword Benchmark" failed, since its
+    /// name came straight from the title and a bottle name can't hold a colon.
+    func testSafeNameFromTitle() {
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "Onimusha: Way of the Sword Benchmark"), "Onimusha - Way of the Sword Benchmark")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "Seven Knights Re:BIRTH"), "Seven Knights Re-BIRTH")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "Fate/Stay Night"), "Fate-Stay Night")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "Who's Your Daddy?!"), "Who's Your Daddy!")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "\"Quoted\" <Game>"), "Quoted Game")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "PEAK"), "PEAK", "a usable title stays as it is")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "...Dots..."), "Dots")
+        XCTAssertEqual(BottleStore.safeName(fromTitle: "???"), "Game")
+        let long = BottleStore.safeName(fromTitle: "BRAZILIAN DRUG DEALER 3: I OPENED A PORTAL TO HELL IN THE FAVELA TRYING TO REVIVE MIT AIA I NEED TO CLOSE IT")
+        XCTAssertLessThanOrEqual(long.count, 60)
+        for title in ["Onimusha: Way of the Sword Benchmark", "Seven Knights Re:BIRTH", "a|b\\c*d", "x\ty", " : ", long] {
+            let name = BottleStore.safeName(fromTitle: title)
+            XCTAssertNil(BottleStore.nameProblem(name), "\(title) -> \(name)")
+            XCTAssertNil(BottleStore.nameProblem(BottleStore.freeName(name, taken: [name])), "with freeName's suffix")
+        }
+    }
 }
