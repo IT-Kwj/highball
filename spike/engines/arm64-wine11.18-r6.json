@@ -1,0 +1,86 @@
+{
+  "$schema": "https://highball.app/schemas/engine-manifest/v0",
+  "id": "arm64-wine11.18-r6",
+  "displayName": "Wine 11.18 native arm64 (preview) r6",
+  "arch": "arm64",
+  "minMacOS": "26.5",
+  "requires": [],
+  "channel": "preview",
+  "direct3D9": "wined3d",
+  "notes": [
+    "r6 (2026-10-20): controllers. The engine's libSDL2 is sdl2-compat, which loads SDL3 as libSDL3.dylib, a name r1 to r5 did not ship (only libSDL3.0.dylib). Its error dialog then never returned inside winedevice, so winebus never finished starting its SDL bus and never started UDEV and IOHID: no joystick, yoke, throttle, pedals or gamepad reached any program on this line. r6 ships the name, and the build now starts SDL through sdl2-compat to check it (highball-engine #20). Measured on the M4 in a fresh prefix: SDL, UDEV and IOHID start within 5 s, where r5 never got past SDL. Microsoft Flight Simulator 2024 reads flight controls through DirectInput 8. Everything else is r5's: the same sources, patches, MoltenVK and renderers.",
+    "r5 (2026-10-19): far less stutter in Microsoft Flight Simulator 2024. The stutter was the game's main thread translating code again after the game's copy protection rewrote it, about 220 page invalidations a second in the memory that also holds the game's own code. FEX patch 0023 adds switches the game's recipe turns on: a store that writes back the bytes already in memory no longer throws the page's translations away (a third of those writes), code on a page the protection just wrote is translated in small units for a few seconds (multiblock translated about four times what runs there), translations whose bytes come back are reinstated (FEX 0020), and FEX's global locks are out of the paths that do not need them. On a base M4 at Gibraltar in daylight (Medium, FSR Balanced, 1920x931 windowed), against r4 with the same recipe otherwise: frames over 100 ms fell from 59 to 5 per 2-minute park and from 55 to 23 per minute of take-off roll, frames over 250 ms from 9 to 0.5 and from 7.5 to 2.2, the 99th percentile frame time from 160 to 71 ms parked and from 220 to 122 ms rolling, and the frame rate rose from 19 to 22.5 parked and from 16 to 19 rolling (four flights against two, three windows of each kind a flight; p < 0.001 parked and rolling).",
+    "Also since r3: an unhandled exception in an x86-64 program logs its full register state (patches-arm64 0041), RtlIsEcCode answers FALSE above the user address space instead of faulting until the stack runs out (0042), and a program sees the page protection it set rather than FEX's write trap (FEX 0022, Wine 0043). Wine 11.18 with patches-arm64 0001 to 0043, FEX 2610 with fex/patches 0001 to 0023; MoltenVK and the renderers are r3's. Every 0023 switch is off unless a recipe sets it: other games run as on r4.",
+    "Known: about one boot in sixteen to forty ends in a crash during the world load (a thread resumes with a wrong stack pointer; under study); a half-second GPU stall on the terrain pass, zero to two a flight; the launch takes about seven minutes to the start screen and four more to the cockpit on warm caches; lights drawn as point sprites and some line effects are missing (Metal has no geometry shaders); far map tiles on the Free Flight page stay coarse; motion blur is best off. A 16 GB Mac is unlikely to hold the game's 25 GB footprint.",
+    "Environments on this engine are new ones: an environment never moves between an Intel engine and this line. The engine's renderers are the vkd3d and dxvk folders of the renderers component, loaded through WINEDLLPATH as on the Intel line."
+  ],
+  "components": {
+    "wine": {
+      "kind": "engine",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/engine-arm64-wine-11.18-20261020T101157Z-sdl3-link-r6/engine-arm64-wine-11.18-20261020T101157Z-sdl3-link-r6.tar.gz",
+      "size": 402870000,
+      "sha256": "625ddf78d29dd0fc91483497ea2c8531a0fc892504931772debf08ea8065e01e",
+      "extract": {
+        "into": "engine",
+        "subpath": "engine"
+      },
+      "license": "LGPL-2.1+",
+      "version": "wine-11.18 (WineHQ) Highball arm64 build 2026-10-20, patches-arm64 0001-0043, FEX 2610 with fex/patches 0001-0023, Wine Mono 11.3.0 and Gecko 2.47.4 included",
+      "note": "Built from WineHQ's wine-11.18.tar.xz (sha pinned in highball-engine/inputs-arm64.json) by highball-engine's build-arm64 workflow (run 39404219427, main fc628ae, the same sources and patches as r5) with llvm-mingw 20260922 for the ARM64X PE side and FEX from source under Wine's emulator names (xtajit64.dll, xtajit.dll); the FEX helper libarm64ecfex.so carries AliasWrite and ZeroPages, and the FEX DLL exports GuestProtection for ntdll (0022, 0043). Stripped. The host libraries Wine opens by name (MoltenVK, FreeType, GnuTLS, SDL) and what they link sit in engine/lib (patch 0030), with libSDL3.dylib beside libSDL3.0.dylib for sdl2-compat (new in r6, the build checks SDL_Init through it). The archive also holds the frameworks folder."
+    },
+    "frameworks": {
+      "kind": "frameworks",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/engine-arm64-wine-11.18-20261020T101157Z-sdl3-link-r6/engine-arm64-wine-11.18-20261020T101157Z-sdl3-link-r6.tar.gz",
+      "size": 402870000,
+      "sha256": "625ddf78d29dd0fc91483497ea2c8531a0fc892504931772debf08ea8065e01e",
+      "extract": {
+        "into": "frameworks",
+        "subpath": "frameworks"
+      },
+      "license": "mixed (LGPL-2.1 GStreamer 1.28.7 and its plugins, Apache-2.0 MoltenVK inside the GStreamer framework)",
+      "version": "GStreamer 1.28.7 (the official macOS framework, pruned to the plugins winegstreamer uses, with applemedia for VideoToolbox decoding, thinned to arm64)",
+      "note": "The same archive as the wine component, its frameworks folder; the store downloads it once."
+    },
+    "moltenvk": {
+      "kind": "runtime",
+      "order": 1,
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/moltenvk-arm64-1.4.2-20261017T003752Z-r3/moltenvk-arm64-1.4.2-20261017T003752Z-r3.tar.gz",
+      "size": 1594975,
+      "sha256": "98403baf8ffd3f10497ef7205ece8cde699ba2d88a1d7275856e668678e957fb",
+      "extract": {
+        "into": "engine/lib/libMoltenVK.dylib",
+        "subpath": "lib/libMoltenVK.dylib"
+      },
+      "license": "Apache-2.0",
+      "version": "MoltenVK 1.4.2 with Highball's moltenvk-arm64 patches 0001-0016 and SPIRV-Cross patches 0001-0004 (r3's)",
+      "note": "Replaces the engine's own libMoltenVK.dylib in engine/lib, the one Wine's winevulkan opens on this line (so it installs after the wine component). Built by highball-engine's build-moltenvk-arm64 workflow (run 38783118608). 0001 rebinds descriptor sets after MoltenVK's helpers, 0011 keeps attachment-less render passes within the GPU's size limit, 0012 keeps an implicit pipeline cache per game and device on disk."
+    },
+    "renderers": {
+      "kind": "renderer",
+      "url": "https://github.com/gauthierpiarrette/highball-engine/releases/download/renderers-arm64-20261015T181326Z-arm64-r1/renderers-arm64-20261015T181326Z-arm64-r1.tar.gz",
+      "size": 11817971,
+      "sha256": "9476a69f2b4fc63c4da25888e1d36a41e5f1884f7c39809e1c03c1c577e15136",
+      "extract": {
+        "into": "renderers",
+        "subpath": "renderers"
+      },
+      "license": "mixed (LGPL-2.1 vkd3d-proton, zlib DXVK)",
+      "version": "vkd3d-proton 3.1 and DXVK 3.1 for MoltenVK, ARM64EC builds with highball-engine's renderers-arm64 patches",
+      "note": "renderers/vkd3d/wine (d3d12, d3d12core, dxgi, d3d11, d3d10core as native DLLs) and renderers/dxvk/wine, loaded through WINEDLLPATH when the environment's graphics mode is vkd3d or dxvk. Built by build-renderers-arm64 (run 38783123603)."
+    }
+  },
+  "baseEnv": {
+    "GST_PLUGIN_PATH": "${frameworks}/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0",
+    "WINEDEBUG": "fixme-all",
+    "MVK_CONFIG_SHADER_SOURCE_COMPRESSION_ALGORITHM": "1",
+    "MVK_CONFIG_RESUME_LOST_DEVICE": "1",
+    "DXVK_RELAX_FEATURES": "1"
+  },
+  "verified": {
+    "date": "2026-10-20",
+    "macos": "27.0",
+    "chip": "Apple M4",
+    "result": "This archive on a Mac mini M4 with 32 GB (checksum checked). Controllers: in a fresh prefix with +hid, winebus logged SDL, UDEV and IOHID 'main loop started' within 10 s, where r5's never got past 'SDL main loop starting', and the test harness's Steam, restarted on r6, started the same three and signed in. Steam copy of Microsoft Flight Simulator 2024 through the test harness with the recipe's settings (flight r6chk): boot, Free Flight, a Cessna 172 at Gibraltar, a 2-minute park and a 1-minute take-off roll in daylight, about 8 minutes to the start screen and 16 to the cockpit; no crash, no unhandled exception, no GPU hang; 26.1 fps parked and 21.8 rolling on this one flight (r5: 22.5 and 19 over four). Not tested: a real controller (the M4 has none), other Macs."
+  },
+  "licenses": {}
+}
