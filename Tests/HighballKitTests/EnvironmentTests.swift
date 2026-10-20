@@ -313,6 +313,50 @@ final class EnvironmentTests: XCTestCase {
                        "dxmt comes after d3dmetal, so d3dmetal still serves everything it ships")
     }
 
+    /// Forza Horizon 6 reaches DLSS through Streamline, whose NGX loads its core (_nvngx.dll) from the folder
+    /// the registry names and checks the file's signature. With the switch on and D3DMetal in effect, the
+    /// signed bridge is linked into C:\highball\ngx under both core names, D3DMetal is told that folder, and
+    /// the bridge's unix half answers to _nvngx too. With the switch off nothing of it is set up.
+    func testTheDLSSSwitchGivesNGXASignedCoreFolder() throws {
+        let engine = try d3dmetalEngine()
+        defer { try? FileManager.default.removeItem(at: engine.root) }
+        let wine = try XCTUnwrap(engine.rendererDir("d3dmetal")).appending(path: "wine")
+        let pe = wine.appending(path: "\(engine.manifest.pe64LibDir)/nvngx-on-metalfx.dll"), so = wine.appending(path: "\(engine.manifest.unixLibDir)/nvngx-on-metalfx.so")
+        for f in [pe, so] {
+            try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("bridge".utf8).write(to: f)
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "hb-test-dlss-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var bottle = Bottle(url: root, settings: BottleSettings(name: "t", engineID: engine.id))
+
+        var env = try bottle.environment(engine: engine, renderer: .d3dmetal)
+        XCTAssertNil(env["D3DM_NVNGX_PATH"], "switch off: D3DMetal keeps its own default")
+        try bottle.prepareDLSSBridge(engine: engine, renderer: .d3dmetal)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bottle.ngxCoreDir.path), "switch off: nothing is linked")
+
+        bottle.settings.dlssEnabled = true
+        env = try bottle.environment(engine: engine, renderer: .d3dmetal)
+        XCTAssertEqual(env["D3DM_ENABLE_METALFX"], "1")
+        XCTAssertEqual(env["D3DM_NVNGX_PATH"], #"C:\highball\ngx"#)
+        XCTAssertLessThanOrEqual(Bottle.ngxCoreWindowsDir.count, 129, "D3DMetal ignores a longer folder")
+        XCTAssertTrue(env["WINEDLLPATH_PREPEND"]?.hasPrefix(root.appending(path: ".highball-dlss/wine").path) == true, "the aliases come first")
+        XCTAssertTrue(env["WINEDLLOVERRIDES"]?.contains("nvapi64,nvngx=n,b") == true)
+
+        for _ in 0..<2 {   // a second launch finds everything in place
+            try bottle.prepareDLSSBridge(engine: engine, renderer: .d3dmetal)
+            func target(_ u: URL) -> String? { (try? FileManager.default.destinationOfSymbolicLink(atPath: u.path)).map { URL(fileURLWithPath: $0).standardizedFileURL.path } }
+            for name in ["nvngx.dll", "_nvngx.dll"] {
+                XCTAssertEqual(target(bottle.ngxCoreDir.appending(path: name)), pe.standardizedFileURL.path, "C:\\highball\\ngx\\\(name) is the signed bridge")
+            }
+            let aliases = root.appending(path: ".highball-dlss/wine")
+            XCTAssertEqual(target(aliases.appending(path: "\(engine.manifest.pe64LibDir)/nvngx.dll")), pe.standardizedFileURL.path)
+            XCTAssertEqual(target(aliases.appending(path: "\(engine.manifest.pe64LibDir)/_nvngx.dll")), pe.standardizedFileURL.path)
+            XCTAssertEqual(target(aliases.appending(path: "\(engine.manifest.unixLibDir)/nvngx.so")), so.standardizedFileURL.path)
+            XCTAssertEqual(target(aliases.appending(path: "\(engine.manifest.unixLibDir)/_nvngx.so")), so.standardizedFileURL.path)
+        }
+    }
+
     // the fps cap reaches the 32-bit games dxmt serves on a d3dmetal environment
     func testD3DMetalPassesTheFpsCapToDXMT() throws {
         let engine = try d3dmetalEngine()

@@ -817,10 +817,11 @@ public struct Bottle: Sendable {
                 merge(&env, ["WINEDLLOVERRIDES+": "nvapi64,nvngx=n,b"])
             case .d3dmetal:
                 env["D3DM_ENABLE_METALFX"] = "1"
-                if needsDLSSBridgeAliases(engine: engine) {
-                    let aliases = url.appending(path: ".highball-dlss/wine").path
-                    merge(&env, ["WINEDLLPATH_PREPEND+": aliases])
-                }
+                // The bridge's unix half has to be found under the core's name too (_nvngx), so the
+                // aliases are on the DLL path whenever the switch is on. D3DMetal writes this folder into
+                // the registry as NGX's core location (see prepareDLSSBridge).
+                merge(&env, ["WINEDLLPATH_PREPEND+": url.appending(path: ".highball-dlss/wine").path])
+                env["D3DM_NVNGX_PATH"] = Self.ngxCoreWindowsDir
                 merge(&env, ["WINEDLLOVERRIDES+": "nvapi64,nvngx=n,b"])
             default:
                 break
@@ -904,16 +905,12 @@ public struct Bottle: Sendable {
         }
     }
 
-    private func needsDLSSBridgeAliases(engine: InstalledEngine) -> Bool {
-        guard let dir = engine.rendererDir("d3dmetal") else { return false }
-        let wine = dir.appending(path: "wine")
-        let pe = engine.manifest.pe64LibDir, unix = engine.manifest.unixLibDir
-        let needsWindowsAlias = !FileManager.default.fileExists(atPath: wine.appending(path: "\(pe)/nvngx.dll").path)
-            && FileManager.default.fileExists(atPath: wine.appending(path: "\(pe)/nvngx-on-metalfx.dll").path)
-        let needsUnixAlias = !FileManager.default.fileExists(atPath: wine.appending(path: "\(unix)/nvngx.so").path)
-            && FileManager.default.fileExists(atPath: wine.appending(path: "\(unix)/nvngx-on-metalfx.so").path)
-        return needsWindowsAlias || needsUnixAlias
-    }
+    /// Where NGX finds its core, as Windows sees it and on disk. A real file has to sit there: NGX checks
+    /// the Authenticode signature of the file at the path it loads, and Wine's system32 has only an
+    /// unsigned placeholder for a builtin DLL. D3DMetal reads D3DM_NVNGX_PATH (129 characters at most)
+    /// and writes it to HKLM\SOFTWARE\NVIDIA Corporation\Global\NGXCore\FullPath.
+    public static let ngxCoreWindowsDir = #"C:\highball\ngx"#
+    public var ngxCoreDir: URL { driveC.appending(path: "highball/ngx", directoryHint: .isDirectory) }
 
     /// Windows path of the generated DXVK config inside the prefix.
     public static let dxvkConfigWindowsPath = #"C:\highball\dxvk.conf"#
@@ -1035,33 +1032,49 @@ public struct Bottle: Sendable {
     /// for the standard nvngx module name, so expose aliases inside this bottle (never the shared
     /// engine or Windows system32). The aliases are only put on the DLL search path when the
     /// setting is enabled and D3DMetal is the effective renderer.
+    ///
+    /// Games that reach DLSS through NVIDIA Streamline load NGX's core, _nvngx.dll, from the folder
+    /// the registry names, and refuse a file without a valid signature there. Wine's system32 holds
+    /// only an unsigned placeholder for a builtin DLL, so NGX failed ("failed to load NGXCore") and
+    /// Streamline dropped DLSS from the game's menu (Forza Horizon 6, 2026-10-20). The bridge Apple
+    /// signs is linked into ngxCoreDir as nvngx.dll and _nvngx.dll, and its unix half is aliased as
+    /// _nvngx.so, the name Wine looks for when the core loads.
     public func prepareDLSSBridge(engine: InstalledEngine, renderer: Renderer) throws {
         guard settings.dlssEnabled, renderer == .d3dmetal,
               supportsDLSS(engine: engine, renderer: renderer),
               let dir = engine.rendererDir("d3dmetal") else { return }
         let pe = engine.manifest.pe64LibDir, unix = engine.manifest.unixLibDir
-        let sources = [
-            (dir.appending(path: "wine/\(pe)/nvngx.dll"), dir.appending(path: "wine/\(pe)/nvngx-on-metalfx.dll"), "\(pe)/nvngx.dll"),
-            (dir.appending(path: "wine/\(unix)/nvngx.so"), dir.appending(path: "wine/\(unix)/nvngx-on-metalfx.so"), "\(unix)/nvngx.so"),
-        ]
         let fm = FileManager.default
-        let wineDir = url.appending(path: ".highball-dlss/wine", directoryHint: .isDirectory)
-        for (direct, renamed, relativeTarget) in sources {
-            if fm.fileExists(atPath: direct.path) { continue }
-            guard fm.fileExists(atPath: renamed.path) else {
-                throw HighballError.missing("D3DMetal's DLSS-to-MetalFX bridge (nvngx-on-metalfx)")
-            }
-            let target = wineDir.appending(path: relativeTarget)
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if let existing = try? fm.destinationOfSymbolicLink(atPath: target.path),
-               URL(fileURLWithPath: existing, relativeTo: target.deletingLastPathComponent()).standardizedFileURL == renamed.standardizedFileURL {
-                continue
-            }
-            if fm.fileExists(atPath: target.path) || (try? fm.destinationOfSymbolicLink(atPath: target.path)) != nil {
-                try fm.removeItem(at: target)
-            }
-            try fm.createSymbolicLink(at: target, withDestinationURL: renamed)
+        func bridge(_ libDir: String, _ ext: String) throws -> URL {
+            let direct = dir.appending(path: "wine/\(libDir)/nvngx.\(ext)")
+            if fm.fileExists(atPath: direct.path) { return direct }
+            let renamed = dir.appending(path: "wine/\(libDir)/nvngx-on-metalfx.\(ext)")
+            guard fm.fileExists(atPath: renamed.path) else { throw HighballError.missing("D3DMetal's DLSS-to-MetalFX bridge (nvngx-on-metalfx)") }
+            return renamed
         }
+        let windows = try bridge(pe, "dll"), unixLib = try bridge(unix, "so")
+        let wineDir = url.appending(path: ".highball-dlss/wine", directoryHint: .isDirectory)
+        var links: [(URL, URL)] = [
+            (wineDir.appending(path: "\(pe)/_nvngx.dll"), windows), (wineDir.appending(path: "\(unix)/_nvngx.so"), unixLib),
+            (ngxCoreDir.appending(path: "nvngx.dll"), windows), (ngxCoreDir.appending(path: "_nvngx.dll"), windows),
+        ]
+        if windows.lastPathComponent != "nvngx.dll" { links.append((wineDir.appending(path: "\(pe)/nvngx.dll"), windows)) }
+        if unixLib.lastPathComponent != "nvngx.so" { links.append((wineDir.appending(path: "\(unix)/nvngx.so"), unixLib)) }
+        for (link, target) in links { try Self.symlink(link, to: target) }
+    }
+
+    /// Points link at target, replacing whatever is there unless it already points there.
+    static func symlink(_ link: URL, to target: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let existing = try? fm.destinationOfSymbolicLink(atPath: link.path),
+           URL(fileURLWithPath: existing, relativeTo: link.deletingLastPathComponent()).standardizedFileURL == target.standardizedFileURL {
+            return
+        }
+        if fm.fileExists(atPath: link.path) || (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil {
+            try fm.removeItem(at: link)
+        }
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
     }
 
     private func merge(_ env: inout [String: String], _ add: [String: String]) {
