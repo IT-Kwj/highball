@@ -80,7 +80,7 @@
     "date": "2026-10-20",
     "macos": "27.0",
     "chip": "Apple M4",
-    "result": "This archive on a Mac mini M4 (checksum checked): in a fresh prefix with +hid, winebus logged SDL, UDEV and IOHID 'main loop started' within 10 s, where r5's never got past 'SDL main loop starting'. The flight check on this engine is pending. Not tested: a real controller (the M4 has none), other Macs."
+    "result": "This archive on a Mac mini M4 with 32 GB (checksum checked). Controllers: in a fresh prefix with +hid, winebus logged SDL, UDEV and IOHID 'main loop started' within 10 s, where r5's never got past 'SDL main loop starting', and the test harness's Steam, restarted on r6, started the same three and signed in. Steam copy of Microsoft Flight Simulator 2024 through the test harness with the recipe's settings (flight r6chk): boot, Free Flight, a Cessna 172 at Gibraltar, a 2-minute park and a 1-minute take-off roll in daylight, about 8 minutes to the start screen and 16 to the cockpit; no crash, no unhandled exception, no GPU hang; 26.1 fps parked and 21.8 rolling on this one flight (r5: 22.5 and 19 over four). Not tested: a real controller (the M4 has none), other Macs."
   },
   "licenses": {}
 }
