@@ -2,6 +2,16 @@ import XCTest
 @testable import HighballKit
 
 final class EpicStoreTests: XCTestCase {
+    /// highball#409: an install legendary refused reached the player as "epic install exited with 1".
+    func testLegendaryInstallFailuresBecomeSentences() {
+        XCTAssertEqual(EpicStore.installFailure("[cli] CRITICAL: Not enough available disk space! 51200.00 MiB < 122880.00 MiB"),
+                       "This Mac doesn't have enough free space for the game. It needs 120 GB and 50 GB are free. Free some space, then press Install again.")
+        XCTAssertNil(EpicStore.installFailure("[cli] CRITICAL: Installation cannot proceed, exiting."), "the summary line adds nothing")
+        XCTAssertEqual(EpicStore.installFailure("[cli] ERROR: Game is not owned by this account"),
+                       "Epic's installer stopped with this message. Game is not owned by this account")
+        XCTAssertNil(EpicStore.installFailure("[cli] INFO: Download size: 95232.19 MiB (Compression savings: 2.1%)"))
+    }
+
     /// Legendary has no terminal under Highball: the selective-download prompt (optional
     /// language packs) raised EOFError and killed the install (#110). `-y` alone does not skip it.
     /// legendary's lines as a GTA V Enhanced install printed them (highball#287): the size once,
