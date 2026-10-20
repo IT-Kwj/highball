@@ -218,6 +218,28 @@ public struct Recipe: Codable, Sendable, Identifiable {
         }
     }
 
+    /// True when a step writes a Windows driver's or service's settings, a registry value under
+    /// HKLM\System\CurrentControlSet\Services. A driver reads them when it starts, and Wine starts its drivers
+    /// with the environment: the controller driver read winebus's device options once, when Steam brought the
+    /// environment up, so stopping the Steam client alone left a Honeycomb Bravo a gamepad (highball#397).
+    public var changesDriverSettings: Bool {
+        steps.contains { if case let .registry(key, _, _, _) = $0 { return Self.isServiceKey(key) } else { return false } }
+    }
+
+    static func isServiceKey(_ key: String) -> Bool {
+        let k = key.lowercased().replacingOccurrences(of: "/", with: "\\")
+        return [#"hklm\system\currentcontrolset\services\"#, #"hkey_local_machine\system\currentcontrolset\services\"#]
+            .contains { k.hasPrefix($0) }
+    }
+
+    /// The tweaks this recipe requires that an environment has not applied, in order. A recipe can gain a
+    /// dependency after environments applied it, and Play applies a recipe once, so without this the
+    /// environments that played the game before never got it (Microsoft Flight Simulator 2024's flight controls
+    /// tweak, highball#397). Launchers in `requires` say where the game comes from and are not applied.
+    public func missingRequiredTweaks(applied: [String], resolve: (String) -> Recipe?) -> [Recipe] {
+        (requires ?? []).filter { !applied.contains($0) }.compactMap { resolve($0) }.filter { $0.kind == .tweak }
+    }
+
     public struct KnownIssue: Codable, Sendable {
         public var symptom: String
         public var cause: String?

@@ -562,13 +562,19 @@ final class AppState {
                 return
             }
             if recipe.isAutoApplicable {
+                // The tweaks it brings along count too: a driver setting needs the environment restarted.
+                let driverSettings = recipe.changesDriverSettings
+                    || recipe.missingRequiredTweaks(applied: bottle.settings.recipes, resolve: { Self.recipe($0) })
+                        .contains(where: \.changesDriverSettings)
                 Task { @MainActor in
                     var runner = RecipeRunner(paths: paths, engine: engine, bottle: bottle)
                     if let notes = try? await runner.apply(recipe, resolve: { Self.recipe($0) }) {
                         logLines.append("applied the \(recipe.title) fix")
                         for n in notes { logLines.append("note: \(n)") }
                     }
-                    if recipe.changesLaunchEnvironment {
+                    if driverSettings {
+                        await restartForDriverSettings(engine: engine, bottle: runner.bottle)
+                    } else if recipe.changesLaunchEnvironment {
                         // A running Steam keeps the environment it started with; the game we are
                         // about to launch through it would never see the recipe's settings. Only
                         // the client stops: other programs in the environment keep running.
@@ -593,7 +599,53 @@ final class AppState {
                 }))
             return
         }
+        // A recipe applied before it gained a dependency: the tweaks it requires now and this environment lacks are
+        // applied before the launch, since Play applies a recipe once (Microsoft Flight Simulator 2024's flight
+        // controls tweak for environments set up on 0.10.22 and earlier, highball#397).
+        if let recipe = fixRecipe(for: item), !recipe.isOptIn, bottle.settings.recipes.contains(recipe.id),
+           let engine = engine(for: bottle) {
+            let missing = recipe.missingRequiredTweaks(applied: bottle.settings.recipes, resolve: { Self.recipe($0) })
+            if !missing.isEmpty, missing.allSatisfy(\.isAutoApplicable) {
+                Task { @MainActor in
+                    var runner = RecipeRunner(paths: paths, engine: engine, bottle: bottle)
+                    for tweak in missing {
+                        if let notes = try? await runner.apply(tweak, resolve: { Self.recipe($0) }) {
+                            logLines.append("applied \(tweak.title), which \(recipe.title) now needs")
+                            for n in notes { logLines.append("note: \(n)") }
+                        }
+                    }
+                    if missing.contains(where: \.changesDriverSettings) {
+                        await restartForDriverSettings(engine: engine, bottle: runner.bottle)
+                    } else if missing.contains(where: \.changesLaunchEnvironment) {
+                        try? await WineRunner(paths: paths, engine: engine, bottle: runner.bottle).stopSteam()
+                        logLines.append("stopped the Steam client so the new settings apply to this launch")
+                    }
+                    refresh()
+                    let fresh = bottles.first { $0.name == bottleName } ?? runner.bottle
+                    launch(item, in: fresh, renderer: renderer)
+                }
+                return
+            }
+        }
         launch(item, in: bottle, renderer: renderer)
+    }
+
+    /// After a recipe or tweak wrote a driver's settings (Recipe.changesDriverSettings). Wine's drivers read them
+    /// when the environment starts, so the environment stops before the launch when, the Steam client aside, only
+    /// Wine's own processes run in it, and the launch starts it again with the new settings. Programs the owner
+    /// started keep running, and the log says to stop the environment once.
+    private func restartForDriverSettings(engine: InstalledEngine, bottle: Bottle) async {
+        guard ProcessTable.liveServer(forPrefix: bottle.url) != nil else { return }
+        let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+        try? await runner.stopSteam()
+        // Steam's web helpers can outlive the client by a moment.
+        for _ in 0..<10 where !ProcessTable.isIdle(prefix: bottle.url) { try? await Task.sleep(for: .milliseconds(500)) }
+        if ProcessTable.isIdle(prefix: bottle.url) {
+            _ = try? runner.kill()
+            logLines.append("stopped \(bottle.name) so Wine's drivers start with the new settings")
+        } else {
+            logLines.append("\(bottle.name) has programs running, so its drivers keep their old settings until it stops (Stop all processes)")
+        }
     }
 
     private func launch(_ item: LibraryItem, in bottle: Bottle, renderer: Renderer? = nil) {
