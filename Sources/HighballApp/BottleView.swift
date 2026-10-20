@@ -65,6 +65,7 @@ struct BottleView: View {
                     Menu {
                         Button(L("Show the Windows drive")) { NSWorkspace.shared.open(bottle.driveC) }
                         Button(L("Uninstall Windows programs…")) { state.openUninstaller(in: bottle) }
+                        Button(L("Test controllers…")) { state.openControllerTest(in: bottle) }
                         Button(L("Stop all processes")) { state.killBottle(bottle) }
                     } label: { Label(L("More"), systemImage: "ellipsis.circle") }
                     Spacer()

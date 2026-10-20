@@ -349,6 +349,7 @@ enum L10n {
         "Highball's Wine engine is Intel code and needs Rosetta, Apple's translation layer. A macOS update can remove it. Highball can install it now, or run in Terminal: softwareupdate --install-rosetta --agree-to-license": "Le moteur Wine de Highball est du code Intel et a besoin de Rosetta, la couche de traduction d'Apple. Une mise à jour de macOS peut la retirer. Highball peut l'installer maintenant, ou lancez dans le Terminal : softwareupdate --install-rosetta --agree-to-license",
         "Moves this game's Mac app in ~/Applications/Highball to the Trash.": "Place l’app Mac de ce jeu (dans ~/Applications/Highball) dans la corbeille.",
         "Uninstall Windows programs…": "Désinstaller des programmes Windows…",
+        "Test controllers…": "Tester les manettes…",
         "Opens Windows' Add/Remove Programs for this environment, for programs you installed into it.": "Ouvre Ajout/Suppression de programmes de Windows pour cet environnement, pour les programmes que vous y avez installés.",
         "Steam's first start got stuck; restarting it": "Le premier démarrage de Steam s’est bloqué ; on le relance",
         "That launcher link did not come from one of your Highball apps.": "Ce lien de lanceur ne vient pas d’une de vos apps Highball.",
