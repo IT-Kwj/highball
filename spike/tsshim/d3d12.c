@@ -18,6 +18,12 @@
 //   assertion that aborts the thread. The hook drops the call (HB_TSSHIM_DEPTHRESOLVE=1 lets it
 //   through, for a D3DMetal that has learned to do it).
 //
+// And one wrong result (D3DMetal 4.0b2 and 4.0b3, Forza Horizon 6, 2026-10-20):
+// - Input layouts that place elements with D3D12_APPEND_ALIGNED_ELEMENT get them at the wrong
+//   offsets, so a vertex shader reads another attribute's bytes. Pipelines are handed to D3DMetal
+//   with those offsets written out explicitly, as D3D12's rules give them (HB_TSSHIM_APPEND_OFFSETS=0
+//   passes the layouts through as the game wrote them).
+//
 // Build: x86_64-w64-mingw32-gcc -shared -O2 -Wall -static-libgcc -o d3d12.dll d3d12.c d3d12.def
 // then stamp the "Wine builtin DLL" marker so WINEDLLPATH_PREPEND picks it up.
 #define INITGUID
@@ -376,11 +382,223 @@ static void STDMETHODCALLTYPE hook_ResolveSubresource(ID3D12GraphicsCommandList 
     real_ResolveSubresource(list, dst, dst_sub, src, src_sub, format);
 }
 
+// ---- input layouts ---------------------------------------------------------------------------
+
+// D3D12_APPEND_ALIGNED_ELEMENT puts an element directly after the previous element of the same input
+// slot, in declaration order, aligned to the smaller of 4 bytes and its own size. D3DMetal (4.0b2 and
+// 4.0b3) places such elements elsewhere. Forza Horizon 6 draws its livery vinyls with a slot of nine
+// appended elements (NORMAL R16G16_SNORM, TEXCOORD0-3 R16G16_UNORM, TANGENT0-2 R10G10B10A2_UNORM,
+// COLOR0 R8G8B8A8_UNORM, stride 36) of which the vertex shader reads TEXCOORD0 and COLOR0: the vinyl
+// meshes carry COLOR alpha 255 at every vertex, yet the shapes came out as gradients from 0 to 1 across
+// each quad, the finished livery had alpha 0.25 to 0.7 inside solid shapes, and a liveried car showed
+// mostly its base paint; the vinyl picker's shape thumbnails were gradients too. Other meshes read
+// shifted normals and tangents (blotchy, faceted reflections on factory paint) and the trees' wind
+// data. With the offsets written out the livery reaches alpha 1 and the car, the thumbnails, the
+// reflections and the trees draw right (M4 Max, macOS 27.0.1, D3DMetal 4.0b3). Equivalent by D3D12's
+// rules, so it is applied to every pipeline; HB_TSSHIM_APPEND_OFFSETS=0 turns it off.
+static int keep_append_offsets;
+static UINT vertex_format_size(DXGI_FORMAT f)
+{
+    if (f >= DXGI_FORMAT_R32G32B32A32_TYPELESS && f <= DXGI_FORMAT_R32G32B32A32_SINT) return 16;
+    if (f >= DXGI_FORMAT_R32G32B32_TYPELESS && f <= DXGI_FORMAT_R32G32B32_SINT) return 12;
+    if (f >= DXGI_FORMAT_R16G16B16A16_TYPELESS && f <= DXGI_FORMAT_X32_TYPELESS_G8X24_UINT) return 8;
+    if (f >= DXGI_FORMAT_R10G10B10A2_TYPELESS && f <= DXGI_FORMAT_X24_TYPELESS_G8_UINT) return 4;
+    if (f >= DXGI_FORMAT_R8G8_TYPELESS && f <= DXGI_FORMAT_R16_SINT) return 2;
+    if (f >= DXGI_FORMAT_R8_TYPELESS && f <= DXGI_FORMAT_A8_UNORM) return 1;
+    if (f == DXGI_FORMAT_B5G6R5_UNORM || f == DXGI_FORMAT_B5G5R5A1_UNORM || f == DXGI_FORMAT_B4G4R4A4_UNORM) return 2;
+    if (f >= DXGI_FORMAT_B8G8R8A8_UNORM && f <= DXGI_FORMAT_B8G8R8X8_UNORM_SRGB) return 4;
+    return 0;
+}
+// Writes the layout with every appended offset resolved into out (room for in->NumElements); returns
+// FALSE when nothing was appended or an element's format is one this table does not size.
+static BOOL resolve_append_offsets(const D3D12_INPUT_LAYOUT_DESC *in, D3D12_INPUT_ELEMENT_DESC *out)
+{
+    UINT end[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = { 0 }, i; BOOL appended = FALSE;
+    if (keep_append_offsets || !in || !in->pInputElementDescs || !in->NumElements
+        || in->NumElements > D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT) return FALSE;
+    for (i = 0; i < in->NumElements; i++) {
+        D3D12_INPUT_ELEMENT_DESC e = in->pInputElementDescs[i]; UINT size = vertex_format_size(e.Format);
+        if (!size || e.InputSlot >= D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT) return FALSE;
+        if (e.AlignedByteOffset == D3D12_APPEND_ALIGNED_ELEMENT) {
+            UINT align = size < 4 ? size : 4;
+            e.AlignedByteOffset = (end[e.InputSlot] + align - 1) / align * align;
+            appended = TRUE;
+        }
+        end[e.InputSlot] = e.AlignedByteOffset + size;
+        out[i] = e;
+    }
+    if (appended) {
+        static LONG told;
+        if (!InterlockedExchange(&told, 1)) LOG("input layouts with appended elements are given explicit offsets");
+    }
+    return appended;
+}
+
+// A pipeline state stream is a run of subobjects, each a D3D12_PIPELINE_STATE_SUBOBJECT_TYPE followed by
+// its description at that description's alignment, the pair padded to pointer size. Only the input layout
+// is rewritten; a stream with a subobject type this table does not know is passed through untouched.
+static SIZE_T stream_inner_size(UINT type, SIZE_T *inner_align)
+{
+    static const struct { UINT size, align; } t[] = {
+        { 8, 8 },      // ROOT_SIGNATURE
+        { 16, 8 }, { 16, 8 }, { 16, 8 }, { 16, 8 }, { 16, 8 }, { 16, 8 },   // VS PS DS HS GS CS
+        { 32, 8 },     // STREAM_OUTPUT
+        { 328, 4 },    // BLEND
+        { 4, 4 },      // SAMPLE_MASK
+        { 44, 4 },     // RASTERIZER
+        { 52, 4 },     // DEPTH_STENCIL
+        { 16, 8 },     // INPUT_LAYOUT
+        { 4, 4 },      // IB_STRIP_CUT_VALUE
+        { 4, 4 },      // PRIMITIVE_TOPOLOGY
+        { 36, 4 },     // RENDER_TARGET_FORMATS
+        { 4, 4 },      // DEPTH_STENCIL_FORMAT
+        { 8, 4 },      // SAMPLE_DESC
+        { 4, 4 },      // NODE_MASK
+        { 16, 8 },     // CACHED_PSO
+        { 4, 4 },      // FLAGS
+        { 56, 4 },     // DEPTH_STENCIL1
+        { 24, 8 },     // VIEW_INSTANCING
+        { 0, 0 },      // 23 unused
+        { 16, 8 }, { 16, 8 },   // AS MS
+        { 60, 4 },     // DEPTH_STENCIL2
+        { 44, 4 },     // RASTERIZER1
+        { 40, 4 },     // RASTERIZER2
+    };
+    if (type >= sizeof t / sizeof *t || !t[type].size) return 0;
+    *inner_align = t[type].align;
+    return t[type].size;
+}
+static BOOL rewrite_stream(const D3D12_PIPELINE_STATE_STREAM_DESC *in, D3D12_PIPELINE_STATE_STREAM_DESC *out, void **copy, D3D12_INPUT_ELEMENT_DESC *elems)
+{
+    const UINT8 *s; SIZE_T o = 0, inner_at = 0;
+    if (keep_append_offsets || !in || !in->pPipelineStateSubobjectStream || !in->SizeInBytes) return FALSE;
+    s = in->pPipelineStateSubobjectStream;
+    while (o + sizeof(UINT) <= in->SizeInBytes) {
+        UINT type; SIZE_T align, size, at;
+        memcpy(&type, s + o, sizeof type);
+        if (!(size = stream_inner_size(type, &align))) return FALSE;
+        at = (o + sizeof(UINT) + align - 1) & ~(align - 1);
+        if (at + size > in->SizeInBytes) return FALSE;
+        if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT) inner_at = at;
+        o = (at + size + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
+    }
+    if (!inner_at) return FALSE;
+    {
+        D3D12_INPUT_LAYOUT_DESC layout; UINT8 *buf;
+        memcpy(&layout, s + inner_at, sizeof layout);
+        if (!resolve_append_offsets(&layout, elems) || !(buf = malloc(in->SizeInBytes))) return FALSE;
+        memcpy(buf, s, in->SizeInBytes);
+        layout.pInputElementDescs = elems;
+        memcpy(buf + inner_at, &layout, sizeof layout);
+        out->SizeInBytes = in->SizeInBytes; out->pPipelineStateSubobjectStream = buf; *copy = buf;
+    }
+    return TRUE;
+}
+
+// With HB_TSSHIM_DEBUG every graphics pipeline is logged under the number D3DMetal gives it (one counter
+// for graphics and compute pipelines, counted as they are created, so creation is serialised here while
+// debugging), which ties D3DMetal's "marking PSO(N) as no-op" errors to the shaders behind them.
+static CRITICAL_SECTION pso_lock; static unsigned pso_seq;
+static UINT64 bytecode_hash(D3D12_SHADER_BYTECODE b)
+{
+    UINT64 h = 0;
+    if (b.pShaderBytecode && b.BytecodeLength >= 32 && !memcmp(b.pShaderBytecode, "DXBC", 4)) memcpy(&h, (const UINT8 *)b.pShaderBytecode + 4, 8);
+    return h;
+}
+static HRESULT (STDMETHODCALLTYPE *real_CreateGraphicsPipelineState)(ID3D12Device *, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *, REFIID, void **);
+static HRESULT (STDMETHODCALLTYPE *real_CreateComputePipelineState)(ID3D12Device *, const D3D12_COMPUTE_PIPELINE_STATE_DESC *, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_CreateGraphicsPipelineState(ID3D12Device *dev, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *d, REFIID riid, void **out)
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC copy; D3D12_INPUT_ELEMENT_DESC elems[D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT]; HRESULT hr; unsigned n;
+    if (d && resolve_append_offsets(&d->InputLayout, elems)) { copy = *d; copy.InputLayout.pInputElementDescs = elems; d = &copy; }
+    if (!dbg) return real_CreateGraphicsPipelineState(dev, d, riid, out);
+    EnterCriticalSection(&pso_lock);
+    hr = real_CreateGraphicsPipelineState(dev, d, riid, out);
+    n = pso_seq++;
+    LeaveCriticalSection(&pso_lock);
+    if (d) LOG("pipeline %u: vs %016llx ps %016llx ds %016llx hs %016llx gs %016llx, %u targets (format %u), %u samples, hr 0x%08lx", n,
+               (unsigned long long)bytecode_hash(d->VS), (unsigned long long)bytecode_hash(d->PS), (unsigned long long)bytecode_hash(d->DS),
+               (unsigned long long)bytecode_hash(d->HS), (unsigned long long)bytecode_hash(d->GS), d->NumRenderTargets, (unsigned)d->RTVFormats[0],
+               d->SampleDesc.Count, (unsigned long)hr);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hook_CreateComputePipelineState(ID3D12Device *dev, const D3D12_COMPUTE_PIPELINE_STATE_DESC *d, REFIID riid, void **out)
+{
+    HRESULT hr; unsigned n;
+    EnterCriticalSection(&pso_lock);
+    hr = real_CreateComputePipelineState(dev, d, riid, out);
+    n = pso_seq++;
+    LeaveCriticalSection(&pso_lock);
+    if (d) LOG("pipeline %u: cs %016llx, hr 0x%08lx", n, (unsigned long long)bytecode_hash(d->CS), (unsigned long)hr);
+    return hr;
+}
+static HRESULT (STDMETHODCALLTYPE *real_CreatePipelineState)(ID3D12Device2 *, const D3D12_PIPELINE_STATE_STREAM_DESC *, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_CreatePipelineState(ID3D12Device2 *dev, const D3D12_PIPELINE_STATE_STREAM_DESC *d, REFIID riid, void **out)
+{
+    D3D12_PIPELINE_STATE_STREAM_DESC copy; D3D12_INPUT_ELEMENT_DESC elems[D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT]; void *buf = NULL; HRESULT hr;
+    if (rewrite_stream(d, &copy, &buf, elems)) d = &copy;
+    hr = real_CreatePipelineState(dev, d, riid, out);
+    free(buf);
+    return hr;
+}
+// A pipeline library hands back a stored pipeline only for the description it was stored with, and the
+// stored one went to D3DMetal rewritten, so loads are rewritten the same way.
+static HRESULT (STDMETHODCALLTYPE *real_LoadGraphicsPipeline)(ID3D12PipelineLibrary *, LPCWSTR, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_LoadGraphicsPipeline(ID3D12PipelineLibrary *lib, LPCWSTR name, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *d, REFIID riid, void **out)
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC copy; D3D12_INPUT_ELEMENT_DESC elems[D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT];
+    if (d && resolve_append_offsets(&d->InputLayout, elems)) { copy = *d; copy.InputLayout.pInputElementDescs = elems; d = &copy; }
+    return real_LoadGraphicsPipeline(lib, name, d, riid, out);
+}
+static HRESULT (STDMETHODCALLTYPE *real_LoadPipeline)(ID3D12PipelineLibrary1 *, LPCWSTR, const D3D12_PIPELINE_STATE_STREAM_DESC *, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_LoadPipeline(ID3D12PipelineLibrary1 *lib, LPCWSTR name, const D3D12_PIPELINE_STATE_STREAM_DESC *d, REFIID riid, void **out)
+{
+    D3D12_PIPELINE_STATE_STREAM_DESC copy; D3D12_INPUT_ELEMENT_DESC elems[D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT]; void *buf = NULL; HRESULT hr;
+    if (rewrite_stream(d, &copy, &buf, elems)) d = &copy;
+    hr = real_LoadPipeline(lib, name, d, riid, out);
+    free(buf);
+    return hr;
+}
+static HRESULT (STDMETHODCALLTYPE *real_CreatePipelineLibrary)(ID3D12Device1 *, const void *, SIZE_T, REFIID, void **);
+static HRESULT STDMETHODCALLTYPE hook_CreatePipelineLibrary(ID3D12Device1 *dev, const void *blob, SIZE_T len, REFIID riid, void **out)
+{
+    HRESULT hr = real_CreatePipelineLibrary(dev, blob, len, riid, out);
+    if (SUCCEEDED(hr) && out && *out) {
+        IUnknown *u = *out; ID3D12PipelineLibrary *lib = NULL; ID3D12PipelineLibrary1 *lib1 = NULL;
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12PipelineLibrary, (void **)&lib)) && lib) {
+            ID3D12PipelineLibraryVtbl *vt = (ID3D12PipelineLibraryVtbl *)lib->lpVtbl;
+            patch_slot((void **)&vt->LoadGraphicsPipeline, (void *)hook_LoadGraphicsPipeline, (void **)&real_LoadGraphicsPipeline);
+            lib->lpVtbl->Release(lib);
+        }
+        if (SUCCEEDED(u->lpVtbl->QueryInterface(u, &IID_ID3D12PipelineLibrary1, (void **)&lib1)) && lib1) {
+            ID3D12PipelineLibrary1Vtbl *vt = (ID3D12PipelineLibrary1Vtbl *)lib1->lpVtbl;
+            patch_slot((void **)&vt->LoadGraphicsPipeline, (void *)hook_LoadGraphicsPipeline, (void **)&real_LoadGraphicsPipeline);
+            patch_slot((void **)&vt->LoadPipeline, (void *)hook_LoadPipeline, (void **)&real_LoadPipeline);
+            lib1->lpVtbl->Release(lib1);
+        }
+    }
+    return hr;
+}
+// The two calls below exist only from ID3D12Device1 and ID3D12Device2 on, so they are patched only in
+// vtables reached through those interfaces.
+static void patch_device1_vtbl(void *iface)
+{
+    ID3D12Device1Vtbl *vt = *(ID3D12Device1Vtbl **)iface;
+    patch_slot((void **)&vt->CreatePipelineLibrary, (void *)hook_CreatePipelineLibrary, (void **)&real_CreatePipelineLibrary);
+}
+static void patch_device2_vtbl(void *iface)
+{
+    ID3D12Device2Vtbl *vt = *(ID3D12Device2Vtbl **)iface;
+    patch_slot((void **)&vt->CreatePipelineState, (void *)hook_CreatePipelineState, (void **)&real_CreatePipelineState);
+}
+
 static void patch_device_vtbl(void *iface)
 {
     ID3D12DeviceVtbl *vt = *(ID3D12DeviceVtbl **)iface;
     patch_slot((void **)&vt->CreateQueryHeap, (void *)hook_CreateQueryHeap, (void **)&real_CreateQueryHeap);
     patch_slot((void **)&vt->CheckFeatureSupport, (void *)hook_CheckFeatureSupport, (void **)&real_CheckFeatureSupport);
+    patch_slot((void **)&vt->CreateGraphicsPipelineState, (void *)hook_CreateGraphicsPipelineState, (void **)&real_CreateGraphicsPipelineState);
+    if (dbg) patch_slot((void **)&vt->CreateComputePipelineState, (void *)hook_CreateComputePipelineState, (void **)&real_CreateComputePipelineState);
     if (dbg) {
         patch_slot((void **)&vt->CreateCommittedResource, (void *)hook_CreateCommittedResource, (void **)&real_CreateCommittedResource);
         patch_slot((void **)&vt->CreatePlacedResource, (void *)hook_CreatePlacedResource, (void **)&real_CreatePlacedResource);
@@ -445,8 +663,15 @@ static void patch_device(ID3D12Device *dev)
 #endif
     };
     static const D3D12_COMMAND_LIST_TYPE types[] = { D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_TYPE_COMPUTE, D3D12_COMMAND_LIST_TYPE_COPY };
-    int t;
+    int t, i;
     patch_all((IUnknown *)dev, dev_ids, sizeof dev_ids / sizeof *dev_ids, patch_device_vtbl);
+    for (i = 0; i < (int)(sizeof dev_ids / sizeof *dev_ids); i++) {
+        void *p = NULL;
+        if (FAILED(dev->lpVtbl->QueryInterface(dev, dev_ids[i], &p)) || !p) continue;
+        patch_device1_vtbl(p);
+        if (i >= 1) patch_device2_vtbl(p);   // dev_ids[0] is ID3D12Device1, the rest are ID3D12Device2 and later
+        ((IUnknown *)p)->lpVtbl->Release((IUnknown *)p);
+    }
     for (t = 0; t < 3; t++) {
         ID3D12CommandAllocator *alloc = NULL; ID3D12GraphicsCommandList *list = NULL; ID3D12CommandQueue *queue = NULL;
         D3D12_COMMAND_QUEUE_DESC qd = { types[t], 0, D3D12_COMMAND_QUEUE_FLAG_NONE, 0 };
@@ -530,11 +755,13 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         self = inst;
         DisableThreadLibraryCalls(inst);
         InitializeCriticalSection(&ring_lock);
+        InitializeCriticalSection(&pso_lock);
         QueryPerformanceFrequency(&f); qpc_freq = (UINT64)f.QuadPart;
         dbg = GetEnvironmentVariableA("HB_TSSHIM_DEBUG", NULL, 0) > 0;
         { char v[8]; idle = GetEnvironmentVariableA("HB_D3D12_TSSHIM", v, sizeof v) == 1 && v[0] == '0'; }   // kill switch
         { char v[8]; pass_depth_resolve = GetEnvironmentVariableA("HB_TSSHIM_DEPTHRESOLVE", v, sizeof v) == 1 && v[0] == '1'; }
         { char v[8]; claim_atomic64 = GetEnvironmentVariableA("HB_TSSHIM_ATOMIC64", v, sizeof v) == 1 && v[0] == '1'; }
+        { char v[8]; keep_append_offsets = GetEnvironmentVariableA("HB_TSSHIM_APPEND_OFFSETS", v, sizeof v) == 1 && v[0] == '0'; }
         if (!load_real()) return FALSE;
         RESOLVE(D3D12CoreCreateLayeredDevice); RESOLVE(D3D12CoreGetLayeredDeviceSize); RESOLVE(D3D12CoreRegisterLayers);
         RESOLVE(D3D12CreateRootSignatureDeserializer); RESOLVE(D3D12CreateVersionedRootSignatureDeserializer);
