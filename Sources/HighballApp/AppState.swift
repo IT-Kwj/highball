@@ -3019,12 +3019,14 @@ final class AppState {
             let store = epicStore
             epicDownloadTotal = nil
             let refused = OSAllocatedUnfairLock(initialState: false)
+            let failure = OSAllocatedUnfairLock<String?>(initialState: nil)
             // Stop cancels this task, and the cancellation reaches legendary as a Ctrl-C, which
             // keeps the download's progress for the next Install.
             let status = try await withTaskCancellationHandler {
                 try await Task.detached {
                     try store.install(game.app_name, into: bottle, control: control) { line in
                         if EpicStore.refusedForLock(line) { refused.withLock { $0 = true } }
+                        if let why = EpicStore.installFailure(line) { failure.withLock { if $0 == nil { $0 = why } } }
                         Task { @MainActor in self.appendLog(line); self.reportEpicDownload(line) }
                     }
                 }.value
@@ -3034,6 +3036,7 @@ final class AppState {
                 throw HighballError.failed(L("Another Epic download is still running, and legendary installs one game at a time. If Highball shows none, one started before Highball last quit is still going, so quit legendary in Activity Monitor and press Install again."))
             }
             guard status == 0 else {
+                if let why = failure.withLock({ $0 }) { throw HighballError.failed(why) }
                 throw HighballError.processFailed(command: "epic install", status: status, output: "see the log above")
             }
             await MainActor.run { self.epicRefresh() }

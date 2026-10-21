@@ -205,6 +205,24 @@ public struct EpicStore: Sendable {
         line.contains("Failed to acquire installed data lock")
     }
 
+    /// legendary's reason for refusing an install, as a sentence for the player, from one line of its
+    /// output, or nil. Its checks print "[cli] CRITICAL: Not enough available disk space! 51200.00 MiB <
+    /// 123456.00 MiB" and exit 1, which reached the player as only "epic install exited with 1, see the
+    /// log above" (highball#409, Red Dead Redemption 2, well over 100 GB).
+    public static func installFailure(_ line: String) -> String? {
+        guard let r = line.range(of: "CRITICAL: ") ?? line.range(of: "ERROR: ") else { return nil }
+        let message = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard !message.isEmpty, !message.hasPrefix("Installation cannot proceed") else { return nil }
+        if message.hasPrefix("Not enough available disk space") {
+            let gb = { (bytes: Int64) in String(format: "%.0f GB", Double(bytes) / 1_073_741_824) }
+            if let free = mebibytes(after: "disk space!", in: message), let needed = mebibytes(after: "< ", in: message) {
+                return "This Mac doesn't have enough free space for the game. It needs \(gb(needed)) and \(gb(free)) are free. Free some space, then press Install again."
+            }
+            return "This Mac doesn't have enough free space for the game. Free some space, then press Install again."
+        }
+        return "Epic's installer stopped with this message. \(message)"
+    }
+
     /// legendary's install log names the download's size before it starts ("Download size:
     /// 95232.19 MiB (Compression savings: 2.1%)") and then, about once a second, how much has
     /// arrived (" - Downloaded: 9075.51 MiB, Written: 9415.55 MiB"). The activity strip shows
