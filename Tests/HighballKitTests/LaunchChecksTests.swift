@@ -31,6 +31,27 @@ final class LaunchChecksTests: XCTestCase {
                        "# DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN=1\n# MVK_CONFIG_USE_MTLHEAP=0\n# SDL_JOYSTICK_MFI=0\n# WINE_NO_DELAYED_FORK=1\n")
     }
 
+    /// highball#420: an Epic game's launch printed its exchange code and account into a public issue.
+    func testTheHeaderKeepsSecretArgumentsOut() {
+        let args = ["C:\\Games\\installer.exe", "-AUTH_LOGIN=unused", "-AUTH_PASSWORD=b591ee791c13", "-AUTH_TYPE=exchangecode",
+                    "-epicapp=d91f8774", "-epicusername=Someone", "-epicuserid=0123abcd", "-applaunch", "620"]
+        XCTAssertEqual(WineRunner.redactedForReport(args),
+                       ["C:\\Games\\installer.exe", "-AUTH_LOGIN=unused", "-AUTH_PASSWORD=[redacted]", "-AUTH_TYPE=exchangecode",
+                        "-epicapp=d91f8774", "-epicusername=[redacted]", "-epicuserid=[redacted]", "-applaunch", "620"])
+    }
+
+    /// highball#416: a client a game's Play started under D3DMetal showed a black window on Show Steam.
+    func testSteamWindowRestartsOnlyFromD3DMetal() {
+        let engine = "/Users/x/Library/Application Support/Highball/engines/x64-crossover26.3-r27"
+        let d3dmetal = ["WINEDLLPATH_PREPEND": "\(engine)/renderers/d3dmetal-tsshim/wine:\(engine)/frameworks/renderer/d3dmetal/wine:\(engine)/renderers/dxmt/wine"]
+        let dxmt = ["WINEDLLPATH_PREPEND": "\(engine)/renderers/dxmt/wine:\(engine)/frameworks/renderer/d9vk/wine"]
+        let dxvk = ["WINEDLLPATH_PREPEND": "\(engine)/frameworks/renderer/d9vk/wine:\(engine)/frameworks/renderer/dxvk/wine"]
+        XCTAssertTrue(SteamRestart.windowNeedsRestart(live: d3dmetal, window: .dxmt))
+        XCTAssertFalse(SteamRestart.windowNeedsRestart(live: dxmt, window: .dxmt), "already drawing")
+        XCTAssertFalse(SteamRestart.windowNeedsRestart(live: dxvk, window: .dxmt), "not the black case")
+        XCTAssertFalse(SteamRestart.windowNeedsRestart(live: d3dmetal, window: nil), "the window keeps the environment's mode")
+    }
+
     /// A DualSense player had "Controllers through SDL" installed and no way back but regedit.
     func testRegistryOnlyTweaksCanBeRemoved() throws {
         let sdl = try JSONDecoder.highball.decode(Recipe.self, from: Data("""

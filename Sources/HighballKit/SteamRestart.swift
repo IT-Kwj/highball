@@ -27,6 +27,15 @@ public enum SteamRestart {
         return .dxmt
     }
 
+    /// Whether opening Steam's window should restart the running client first: a game's Play started
+    /// it in a D3DMetal environment, so it runs with D3DMetal and its window is black, while the window
+    /// wants `window`. Show then brought back a black square that only deleting the environment
+    /// cleared (highball#416, Wine 11 on an M5 Pro). The caller checks that no game is running.
+    public static func windowNeedsRestart(live: [String: String], window: Renderer?) -> Bool {
+        guard let window, window != .d3dmetal else { return false }
+        return rendererName(ofLive: live) == Renderer.d3dmetal.rawValue
+    }
+
     /// What became of the running client before a launch.
     public enum Outcome: Equatable {
         /// No client runs; the launch cold-starts one with its own environment.

@@ -618,6 +618,8 @@ struct CreateBottleSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = "play"
     @State private var installSteam = true
+    /// nil is the default engine; the picker shows only when the other architecture's line is offered.
+    @State private var engineID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -625,6 +627,16 @@ struct CreateBottleSheet: View {
             TextField(L("Name"), text: $name).textFieldStyle(.roundedBorder).frame(width: 260)
             if let problem = nameProblem, !name.trimmingCharacters(in: .whitespaces).isEmpty {
                 Text(L(problem)).font(.caption).foregroundStyle(.orange).frame(maxWidth: 380, alignment: .leading)
+            }
+            let others = state.newEnvironmentEngines
+            if !others.isEmpty, let standard = state.defaultEngine {
+                Picker(L("Engine"), selection: $engineID) {
+                    Text(String(format: L("%@ (default)"), standard.id)).tag(String?.none)
+                    ForEach(others, id: \.self) { id in Text(id).tag(String?.some(id)) }
+                }
+                .frame(width: 380)
+                Text(L("An environment can't switch later between engines that run through Rosetta and engines that run natively on Apple silicon, so that choice is made here."))
+                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: 380, alignment: .leading)
             }
             Toggle(L("Install Steam in it (recommended)"), isOn: $installSteam)
             Text(L("An environment is an isolated Windows install. First boot takes about 90 seconds; installing Steam adds a download and a slow one-time client update."))
@@ -634,7 +646,7 @@ struct CreateBottleSheet: View {
                 Button(L("Cancel")) { dismiss() }
                 Button(state.busy ? L("Working…") : L("Create")) {
                     dismiss()
-                    state.createBottle(name: name, recipeID: installSteam ? "steam" : nil)
+                    state.createBottle(name: name, recipeID: installSteam ? "steam" : nil, engineID: engineID)
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(nameProblem != nil || state.busy)

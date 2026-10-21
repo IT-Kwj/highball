@@ -48,6 +48,37 @@ final class EngineArchTests: XCTestCase {
         XCTAssertFalse(EngineStore.sameArch(current: "arm64", target: "x86_64"))
     }
 
+    /// highball-db#537: with the preview key set, the arm64 line showed nowhere a player could pick it.
+    /// New environment offers the newest revision of each line of the other architecture, and nothing
+    /// when there is none.
+    func testNewEnvironmentOffersTheOtherArchitecturesNewestRevision() {
+        let intel = manifest("x86_64", requires: ["rosetta2"])
+        var arm1 = manifest("arm64"), arm6 = manifest("arm64"), arm10 = manifest("arm64"), future = manifest("arm64"), other = manifest("arm64")
+        arm1.id = "arm64-wine11.18-r1"; arm6.id = "arm64-wine11.18-r6"; arm10.id = "arm64-wine11.18-r10"
+        future.id = "arm64-wine12.0-r1"; future.minMacOS = "28.0"
+        other.id = "arm64-wine11.20-r2"
+        let root = tempRoot("hb-new-env")
+        let installed = [InstalledEngine(manifest: intel, root: root.appending(path: intel.id)),
+                         InstalledEngine(manifest: arm1, root: root.appending(path: arm1.id))]
+        XCTAssertEqual(EngineStore.newEnvironmentAlternatives(defaultArch: "x86_64", installed: installed, known: [arm6, arm10, future, other], macOS: "27.0.1"),
+                       ["arm64-wine11.20-r2", "arm64-wine11.18-r10"], "one row per line, newest revision, nothing above this macOS")
+        XCTAssertEqual(EngineStore.newEnvironmentAlternatives(defaultArch: "x86_64", installed: installed, known: [], macOS: "27.0"),
+                       ["arm64-wine11.18-r1"], "an installed engine counts without its manifest")
+        XCTAssertEqual(EngineStore.newEnvironmentAlternatives(defaultArch: "x86_64", installed: Array(installed.prefix(1)), known: [], macOS: "27.0"), [],
+                       "nothing to choose, nothing asked")
+        XCTAssertEqual(EngineStore.newEnvironmentAlternatives(defaultArch: "arm64", installed: installed, known: [arm6], macOS: "27.0"),
+                       ["x64-test-r1"], "the same rule the other way round")
+    }
+
+    /// highball#413: Rosetta would not install, so Get started failed while the arm64 line was bundled.
+    func testSetupWithoutRosettaTakesTheNewestNativeEngineItSees() {
+        let intel = manifest("x86_64", requires: ["rosetta2"])
+        var arm5 = manifest("arm64", requires: []), arm6 = manifest("arm64", requires: []), floor28 = manifest("arm64", requires: [])
+        arm5.id = "arm64-wine11.18-r5"; arm6.id = "arm64-wine11.18-r6"; floor28.id = "arm64-wine11.18-r9"; floor28.minMacOS = "28.0"
+        XCTAssertEqual(EngineStore.startingEngineWithoutRosetta(known: [intel, arm5, arm6, floor28], macOS: "27.0.1")?.id, "arm64-wine11.18-r6")
+        XCTAssertNil(EngineStore.startingEngineWithoutRosetta(known: [intel], macOS: "27.0.1"), "without the preview key there is none")
+    }
+
     func testTheDownloadSizeCountsEachArchiveOnce() {
         var m = manifest("arm64")
         let renderers = URL(string: "https://example.com/renderers-arm64.tar.xz")!

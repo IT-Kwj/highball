@@ -194,6 +194,30 @@ public struct EngineStore: Sendable {
         return rows
     }
 
+    /// The engines New environment offers besides the default: the newest revision of each line built
+    /// for another architecture than the default engine's, installed or known. An environment never
+    /// changes architecture (`sameArch`), so before this the native arm64 line was reachable only
+    /// through a game recipe that pins it, whatever the preview key said (highball-db#537). Empty when
+    /// every engine this install sees shares the default's architecture, which is nearly everyone,
+    /// and New environment then asks nothing.
+    public static func newEnvironmentAlternatives(defaultArch: String, installed: [InstalledEngine], known: [EngineManifest],
+                                                  macOS: String = EngineManifest.currentMacOS) -> [String] {
+        var ids = Set(installed.filter { $0.manifest.arch != defaultArch }.map(\.id))
+        ids.formUnion(known.filter { $0.arch != defaultArch && $0.runs(onMacOS: macOS) }.map(\.id))
+        var lines = Set<String>()
+        return ids.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            .filter { lines.insert(EngineManifest.line(of: $0) ?? $0).inserted }
+    }
+
+    /// The engine Get started sets up on when the bundled one needs Rosetta and Rosetta could not be
+    /// installed: the newest engine this install sees that runs without it on this macOS, nil when it
+    /// sees none (no preview key). A Mac on macOS 27 whose update server never answered failed setup
+    /// in under a second while the native line sat in the bundle and the preview key was set (highball#413).
+    public static func startingEngineWithoutRosetta(known: [EngineManifest], macOS: String = EngineManifest.currentMacOS) -> EngineManifest? {
+        known.filter { !$0.requiresRosetta && $0.runs(onMacOS: macOS) }
+            .max { $0.id.compare($1.id, options: .numeric) == .orderedAscending }
+    }
+
     public func engine(_ id: String) throws -> InstalledEngine {
         let root = paths.engine(id)
         let m = try EngineManifest.load(from: root.appending(path: "manifest.json"))
