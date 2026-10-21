@@ -631,6 +631,8 @@ enum L10n {
         "Open Troubleshooting": "Ouvrir le dépannage",
         // Added 2026-09-15: every L() key must have a French line (make-app refuses to build otherwise)
         "New environment": "Nouvel environnement",
+        "%@ (default)": "%@ (par défaut)",
+        "An environment can't switch later between engines that run through Rosetta and engines that run natively on Apple silicon, so that choice is made here.": "Un environnement ne peut pas passer plus tard d'un moteur qui passe par Rosetta à un moteur natif Apple silicon, ni l'inverse, donc ce choix se fait ici.",
         "'%@' isn't a Windows program. Highball opens .exe, .msi and .bat files.": "« %@ » n'est pas un programme Windows. Highball ouvre les fichiers .exe, .msi et .bat.",
         "Programs here start with %@ until this is resolved: %@": "Les programmes d'ici démarrent avec %@ tant que ce n'est pas résolu : %@",
         "-dx11 -skiplauncher \"an argument with spaces\"": "-dx11 -skiplauncher \"un argument avec des espaces\"",

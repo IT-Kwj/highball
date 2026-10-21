@@ -100,10 +100,24 @@ public struct WineRunner: Sendable {
             .joined()
     }
 
+    /// Launch arguments whose values are secrets or identify the player. Launchers pass them on the
+    /// command line: an Epic game started through legendary gets its one-time exchange code as
+    /// -AUTH_PASSWORD, its account name and its account id, and the header printed them into a
+    /// public issue (highball#420, 2026-10-21).
+    static let secretArgumentPrefixes = ["-auth_password=", "-epicusername=", "-epicuserid=", "-epicovt=", "-ticket=", "-token=", "-password="]
+
+    /// The arguments as the header prints them, secret values replaced.
+    static func redactedForReport(_ args: [String]) -> [String] {
+        args.map { arg in
+            guard let prefix = secretArgumentPrefixes.first(where: { arg.lowercased().hasPrefix($0) }) else { return arg }
+            return String(arg.prefix(prefix.count)) + "[redacted]"
+        }
+    }
+
     static func launchHeader(engine: InstalledEngine, bottle: Bottle, renderer: Renderer,
                              env: [String: String], args: [String]) -> String {
         var out = "# gin \(engine.id) bottle=\(bottle.name) renderer=\(renderer)\n"
-        out += "# wine \(args.joined(separator: " "))\n"
+        out += "# wine \(redactedForReport(args).joined(separator: " "))\n"
         out += "# sync=\(Self.effectiveSync(env: env, settings: bottle.settings))"
         out += " winver=\(bottle.settings.windowsVersion.rawValue) dpi=\(bottle.settings.dpiScale)"
         if bottle.settings.retinaAt100 && bottle.settings.dpiScale <= 96 { out += " retina" }

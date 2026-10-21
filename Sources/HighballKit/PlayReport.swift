@@ -71,7 +71,7 @@ public enum PlayReport {
         if !s.recipes.isEmpty { lines.append("recipes \(s.recipes.joined(separator: ", "))") }
         if let pin {
             if let r = pin.renderer { lines.append("program mode \(r.rawValue)") }
-            if !pin.arguments.isEmpty { lines.append("program arguments \(pin.arguments.joined(separator: " "))") }
+            if !pin.arguments.isEmpty { lines.append("program arguments \(WineRunner.redactedForReport(pin.arguments).joined(separator: " "))") }
             for (k, v) in pin.environment.sorted(by: { $0.key < $1.key }) { lines.append("program \(k)=\(v)") }
         }
         return lines.joined(separator: "\n")

@@ -1093,7 +1093,10 @@ final class AppState {
               let m = try? EngineManifest.load(from: url),
               // An installed copy missing its Wine files counts as not installed: it fails every
               // launch (highball#118), and installing it again over itself is the repair.
-              !engines.contains(where: { $0.id == m.id && $0.isComplete }) else { return nil }
+              !engines.contains(where: { $0.id == m.id && $0.isComplete }),
+              // An install set up on the other architecture (the native line, where Rosetta could not
+              // be installed: highball#413) has nothing the bundled engine would update.
+              engines.contains(where: { $0.manifest.arch == m.arch }) else { return nil }
         return m
     }
 
@@ -1372,11 +1375,20 @@ final class AppState {
                 done: DoneState(title: L("Highball is ready"), ctaTitle: nil, cta: nil),
                 stop: .cancelTask(label: L("Stop"))) { [self] in
             funnel(.installStarted)
-            let manifest = try EngineManifest.load(from: manifestURL)
+            var manifest = try EngineManifest.load(from: manifestURL)
             if manifest.requiresRosetta, !rosettaInstalled {
                 await MainActor.run { self.stage = L("Installing Rosetta, Apple's compatibility layer") }
-                try await Self.installRosetta()
-                await MainActor.run { self.rosettaInstalled = true; self.appendLog("Rosetta installed") }
+                do {
+                    try await Self.installRosetta()
+                    await MainActor.run { self.rosettaInstalled = true; self.appendLog("Rosetta installed") }
+                } catch {
+                    // An engine this install sees that needs no Rosetta (the native line, with the
+                    // preview key) sets the Mac up instead of a dead end (highball#413).
+                    guard engines.isEmpty, let native = EngineStore.startingEngineWithoutRosetta(known: Self.knownManifests) else { throw error }
+                    let id = native.id
+                    await MainActor.run { self.appendLog("Rosetta could not be installed, so setup uses \(id), which runs without it") }
+                    manifest = native
+                }
             }
             if engines.isEmpty {
                 _ = try await engineStore.install(manifest, accepted: []) { name, received, total in
@@ -1417,7 +1429,13 @@ final class AppState {
         }.value
         let installed = rosettaWorks()
         guard out.0 == 0 || installed else {
-            throw HighballError.failed("Rosetta did not install. In Terminal, run: softwareupdate --install-rosetta --agree-to-license, then press Get started again. (\(out.1.trimmingCharacters(in: .whitespacesAndNewlines).suffix(200)))")
+            let said = out.1.trimmingCharacters(in: .whitespacesAndNewlines)
+            // "Rosetta 2 update is not available" comes back when macOS cannot load Apple's update
+            // catalog at all; running the same command in Terminal then fails the same way (highball#413).
+            if said.localizedCaseInsensitiveContains("is not available") || said.localizedCaseInsensitiveContains("software update server") {
+                throw HighballError.failed("macOS could not get Rosetta from Apple's software update server. Check that this Mac can reach Apple's servers (a VPN, firewall or content filter can block them, and so can a managed Mac's settings), then press Get started again. (\(said.suffix(200)))")
+            }
+            throw HighballError.failed("Rosetta did not install. In Terminal, run: softwareupdate --install-rosetta --agree-to-license, then press Get started again. (\(said.suffix(200)))")
         }
     }
 
@@ -1776,16 +1794,41 @@ final class AppState {
         catch { fail(error) }
     }
 
-    func createBottle(name: String, recipeID: String?) {
-        guard let engine = defaultEngine else {
+    /// The engines New environment offers besides the default one (EngineStore.newEnvironmentAlternatives):
+    /// none unless this install sees a line built for the other architecture.
+    var newEnvironmentEngines: [String] {
+        guard let fallback = defaultEngine else { return [] }
+        return EngineStore.newEnvironmentAlternatives(defaultArch: fallback.manifest.arch, installed: engines, known: Self.knownManifests)
+    }
+
+    /// `engineID` is one of `newEnvironmentEngines`, nil for the default engine. One that is not
+    /// installed downloads first, with the licences accepted on installed engines.
+    func createBottle(name: String, recipeID: String?, engineID: String? = nil) {
+        guard let fallback = defaultEngine else {
             fail(HighballError.failed("No engine is installed yet. Reinstall Highball, or restart it to finish setup.")); return
         }
         guard !busy else {
             fail(HighballError.failed("Highball is already busy. Wait for the current step to finish, then try again — its progress is on the strip at the bottom of the window.")); return
         }
+        let chosen = engineID.flatMap { id in engines.first { $0.id == id } }
+        let download = chosen == nil ? engineID.flatMap { id in Self.knownManifests.first { $0.id == id } } : nil
+        if let engineID, chosen == nil, download == nil {
+            fail(HighballError.failed("Engine \(engineID) is not offered by this version of Highball.")); return
+        }
+        let accepted = Set(engines.flatMap { $0.manifest.acceptedLicenses ?? [] })
         runBusy(String(format: L("Creating the %@ environment — first boot takes about 90 seconds"), name),
                 done: DoneState(title: String(format: L("The %@ environment is ready"), name), ctaTitle: nil, cta: nil),
                 stop: .cancelTask(label: L("Stop"))) { [self] in
+            var fresh: InstalledEngine?
+            if let download {
+                await MainActor.run { self.stage = String(format: L("Downloading engine %@"), download.id) }
+                let installed = try await engineStore.install(download, accepted: accepted) { name, received, total in
+                    Task { @MainActor in self.reportDownload(name, received: received, total: total) }
+                }
+                await MainActor.run { self.appendLog("engine \(installed.id) installed"); self.refresh() }
+                fresh = installed
+            }
+            let engine = fresh ?? chosen ?? fallback
             let bottle = try await bottleStore.create(name: name, engine: engine)
             await MainActor.run { self.appendLog("bottle created") }
             if let recipeID, let recipe = Self.recipe(recipeID) {
@@ -2519,6 +2562,16 @@ final class AppState {
             // it (issue #33). Ask it to show its window instead, and leave the wineserver alone:
             // a game may still be running under it.
             await BottleStore.preflight(runner: runner, bottle: bottle) { line in Task { @MainActor in self.appendLog(line) } }
+            // A client a game's Play started under D3DMetal shows a black window; with no game
+            // running it is restarted so the window gets the mode it draws with (highball#416).
+            if isSteamUI(pin),
+               let window = SteamRestart.windowRenderer(shortcut: pin.renderer, environment: bottle.settings.renderer,
+                                                        dxmtRuns: Renderer.dxmt.availability(in: engine) == .available),
+               let live = runner.runningSteamEnvironment(), SteamRestart.windowNeedsRestart(live: live, window: window),
+               !runner.steamGameIsRunning() {
+                await MainActor.run { self.appendLog("Steam was running with D3DMetal, which leaves its window black, so it restarts with \(Renderer.displayName(window))") }
+                try await runner.stopSteam()
+            }
             if isSteamUI(pin), let shown = try await runner.showRunningSteam(onOutput: { line in Task { @MainActor in self.appendLog(line) } }) {
                 await MainActor.run { self.appendLog("Steam was already running; asked it to show its window") }
                 if shown.crashedEarly { /* the forward exits at once by design; not a crash */ }
