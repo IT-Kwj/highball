@@ -23,12 +23,17 @@ public enum PlayReport {
     /// The issue URL for highball-db's report form, its fields prefilled by id. Query items use
     /// the form's field ids, which GitHub reads into the matching inputs. The session line goes to
     /// the form's own Session field, not Notes, so the reporter's words in Notes stay theirs
-    /// (highball#347: a prefilled Notes snapped back to the line when edited).
+    /// (highball#347: a prefilled Notes snapped back to the line when edited). The game's name goes
+    /// out twice: `title` is the issue's own title, and `game` fills the form's Game or launcher
+    /// field. That field's id was `title` until 2026-10-22, which GitHub takes for the issue title,
+    /// so the required field stayed empty and players typed "Steam" or "Game" into it (found by
+    /// MagnusPladsen, highball-db#629).
     public static func url(title: String, appid: Int?, renderer: String?, chip: String, macos: String,
                            engine: String, minutes: Int, version: String? = nil, settings: String? = nil) -> URL {
         var comps = URLComponents(string: "https://github.com/gauthierpiarrette/highball-db/issues/new")!
         var items = [URLQueryItem(name: "template", value: template),
-                     URLQueryItem(name: "title", value: title)]
+                     URLQueryItem(name: "title", value: title),
+                     URLQueryItem(name: "game", value: title)]
         if let appid { items.append(URLQueryItem(name: "steam_appid", value: String(appid))) }
         if let renderer { items.append(URLQueryItem(name: "renderer", value: renderer)) }
         if let version { items.append(URLQueryItem(name: "version", value: version)) }
