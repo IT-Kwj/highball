@@ -62,6 +62,15 @@ final class LaunchChecksTests: XCTestCase {
         XCTAssertEqual(WineRunner.joining(["WINEMSYNC": "0", "WINEESYNC": "0"], liveSync: .esync), ["WINEMSYNC": "0", "WINEESYNC": "1"])
     }
 
+    /// highball-db#493: a program set to Wine's own Direct3D on its page ran with the environment's D3DMetal.
+    func testPlayGivesAProgramTheModeItChose() {
+        let pin = Pin(name: "Velocity Ultra", path: "/Volumes/x/game.exe", renderer: .dxvk)
+        XCTAssertEqual(pin.launching(with: .wined3d).renderer, .wined3d, "the page's mode wins for this launch")
+        XCTAssertEqual(pin.launching(with: nil).renderer, .dxvk, "nothing chosen, the pin keeps its own")
+        XCTAssertEqual(pin.launching(with: .wined3d).id, pin.id, "the same program")
+        XCTAssertNil(Pin(name: "x", path: "x.exe").launching(with: nil).renderer, "and with none, the environment decides")
+    }
+
     /// A DualSense player had "Controllers through SDL" installed and no way back but regedit.
     func testRegistryOnlyTweaksCanBeRemoved() throws {
         let sdl = try JSONDecoder.highball.decode(Recipe.self, from: Data("""
