@@ -531,7 +531,7 @@ struct Tricks: AsyncParsableCommand {
         let b = try BottleStore().get(bottle)
         let eng = try EngineStore().engine(b.settings.engineID)
         guard let wt = eng.winetricks else { fail("winetricks not installed in engine \(eng.id)") }
-        var env = try b.environment(engine: eng, renderer: .wined3d)
+        var env = WineRunner.joiningLiveServer(try b.environment(engine: eng, renderer: .wined3d), prefix: b.url)
         env["WINE"] = eng.wineBinary.path
         env["WINE_BIN"] = eng.wineBinary.path
         env["WINESERVER_BIN"] = eng.wineserverBinary.path

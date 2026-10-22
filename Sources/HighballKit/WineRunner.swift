@@ -84,6 +84,22 @@ public struct WineRunner: Sendable {
         return actual == settings.sync ? actual.rawValue : "\(actual.rawValue) (bottle asks \(settings.sync.rawValue))"
     }
 
+    /// `env` with the sync mode of the prefix's running wineserver, when one runs with another.
+    /// Wine fixes the mode when the server starts, and a process started with a different one
+    /// dies before doing anything (issue #32). Every way into a prefix goes through this, the
+    /// winetricks step included: it skipped it, so winetricks' first `wine cmd /c echo %AppData%`
+    /// printed nothing and .NET 4.8 failed in 0 s whenever a Steam window, started with sync
+    /// off, was open (highball#241, #336, reproduced on an M4 2026-10-22).
+    public static func joiningLiveServer(_ env: [String: String], prefix: URL) -> [String: String] {
+        joining(env, liveSync: ProcessTable.liveServerSync(forPrefix: prefix))
+    }
+
+    /// Pure core of `joiningLiveServer`, for tests.
+    static func joining(_ env: [String: String], liveSync: SyncMode?) -> [String: String] {
+        guard let live = liveSync, live != SyncMode(environment: env) else { return env }
+        return env.merging(live.environment) { $1 }
+    }
+
     /// The log's opening block. Beyond the command line it records the few settings that decide
     /// which graphics and synchronization stack the process actually got.
     ///
@@ -178,9 +194,7 @@ public struct WineRunner: Sendable {
         // launch that joins a running server takes that server's mode, whatever the bottle or
         // the caller asked for; the bottle's setting applies to the next cold start. The header
         // below records the adoption ("bottle asks ...").
-        if let live = ProcessTable.liveServerSync(forPrefix: bottle.url), live != SyncMode(environment: env) {
-            env.merge(live.environment) { $1 }
-        }
+        env = Self.joiningLiveServer(env, prefix: bottle.url)
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         let logURL = Self.uniqueLogURL(in: paths.logs, named: "\(stamp)-\(bottle.name)-\(label ?? args.first ?? "wine")")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)

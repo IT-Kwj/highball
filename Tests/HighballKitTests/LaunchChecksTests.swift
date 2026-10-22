@@ -52,6 +52,16 @@ final class LaunchChecksTests: XCTestCase {
         XCTAssertFalse(SteamRestart.windowNeedsRestart(live: d3dmetal, window: nil), "the window keeps the environment's mode")
     }
 
+    /// highball#241, #336: winetricks started its wine processes with the environment's msync while
+    /// a Steam window, started with sync off, held the server, and each of them died at once.
+    func testEveryWayIntoARunningPrefixTakesItsSyncMode() {
+        let msync = ["WINEMSYNC": "1", "WINEESYNC": "0", "WINEPREFIX": "/p"]
+        XCTAssertEqual(WineRunner.joining(msync, liveSync: SyncMode.none), ["WINEMSYNC": "0", "WINEESYNC": "0", "WINEPREFIX": "/p"])
+        XCTAssertEqual(WineRunner.joining(msync, liveSync: .msync), msync, "same mode, nothing changes")
+        XCTAssertEqual(WineRunner.joining(msync, liveSync: nil), msync, "no server running, the environment's own mode starts it")
+        XCTAssertEqual(WineRunner.joining(["WINEMSYNC": "0", "WINEESYNC": "0"], liveSync: .esync), ["WINEMSYNC": "0", "WINEESYNC": "1"])
+    }
+
     /// A DualSense player had "Controllers through SDL" installed and no way back but regedit.
     func testRegistryOnlyTweaksCanBeRemoved() throws {
         let sdl = try JSONDecoder.highball.decode(Recipe.self, from: Data("""
