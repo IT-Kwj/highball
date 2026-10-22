@@ -271,6 +271,17 @@ public struct Pin: Codable, Sendable, Identifiable, Hashable {
         self.name = name; self.path = path; self.arguments = arguments; self.environment = environment; self.renderer = renderer
     }
 
+    /// This pin as one Play of it runs: the mode Play chose for the program (its page's Mode for
+    /// this game, a Direct3D 12 take-over, a mode the engine lacks swapped for one it has) replaces
+    /// the pin's own for that launch only. Play dropped it for programs, so a program set to Wine's
+    /// own Direct3D on its page still ran with the environment's mode (highball-db#493).
+    public func launching(with renderer: Renderer?) -> Pin {
+        guard let renderer else { return self }
+        var pin = self
+        pin.renderer = renderer
+        return pin
+    }
+
     /// Where the pin's executable actually lives for a given bottle.
     public func executableURL(driveC: URL) -> URL {
         let named = launchURL(driveC: driveC)

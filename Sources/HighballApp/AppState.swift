@@ -661,7 +661,7 @@ final class AppState {
                      throughEpicLauncherStandIn: fixRecipe(for: item)?.requires?.contains("rockstar") == true)
         case .pin:
             guard let pin = bottle.settings.pins.first(where: { $0.id == item.pinID }) else { return }
-            launch(pin: pin, in: bottle)
+            launch(pin: pin.launching(with: renderer), in: bottle)
         }
     }
 
