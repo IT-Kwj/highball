@@ -582,6 +582,11 @@ public struct RecipeRunner: Sendable {
                 // (verified 2026-08-25, issue #16). bash rather than sh for the same reason winetricks
                 // documents on macOS.
                 var env = try bottle.environment(engine: engine, renderer: .wined3d, extra: Self.winetricksExtras(engine: engine))
+                // winetricks starts its own wine processes, so it joins a running server's sync mode
+                // the way a launch does, or each of them dies on the spot (highball#241, #336).
+                let joined = WineRunner.joiningLiveServer(env, prefix: bottle.url)
+                if joined != env { log?("[\(recipe.id)] the environment runs with sync \(SyncMode(environment: joined).rawValue), so winetricks uses it too") }
+                env = joined
                 // winetricks shells out to cabextract for Microsoft's cabinet installers (the core
                 // fonts among them) and macOS does not ship it, so the app bundles one under
                 // Resources/tools (highball#96). HIGHBALL_TOOLS names another directory, for the CLI.
