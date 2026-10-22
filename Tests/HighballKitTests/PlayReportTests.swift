@@ -11,6 +11,7 @@ final class PlayReportTests: XCTestCase {
         let q = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         XCTAssertEqual(q["template"], "report.yml")
         XCTAssertEqual(q["title"], "Counter-Strike 2")
+        XCTAssertEqual(q["game"], "Counter-Strike 2", "the form's Game or launcher field, highball-db#629")
         XCTAssertEqual(q["steam_appid"], "730")
         XCTAssertEqual(q["renderer"], "dxmt")
         XCTAssertEqual(q["chip"], "Apple M1 Pro")
