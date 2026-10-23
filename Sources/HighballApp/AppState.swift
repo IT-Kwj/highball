@@ -997,7 +997,7 @@ final class AppState {
         // and a replaced one is reopened.
         installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         let games = Dictionary(bottles.map { ($0.name, SteamLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
-        if games != gamesByBottle { gamesByBottle = games; rebuildLibrary() }
+        if games != gamesByBottle { gamesByBottle = games; forgetProgramExecutables(); rebuildLibrary() }
     }
 
     private func refreshEpicInstalls() {
@@ -1011,14 +1011,14 @@ final class AppState {
                 let installs = EpicStore.installMap(installed)
                 guard installs != self.epicInstalls else { return }
                 self.epicInstalls = installs
+                self.forgetProgramExecutables()
                 self.rebuildLibrary()
             }
         }
     }
 
     func refresh() {
-        executableCache.removeAll()
-        executableMisses.removeAll()
+        forgetProgramExecutables()
         if !prunedLogsThisRun {
             prunedLogsThisRun = true
             let n = LogPruner.prune(directory: paths.logs)
@@ -1928,6 +1928,14 @@ final class AppState {
     /// Installed games whose folder holds no program the search recognises, kept for the same
     /// span: without it a page would walk such a folder five levels deep on every evaluation.
     private var executableMisses: Set<String> = []
+    /// Both are dropped whenever the install records change, not only at a full refresh: a game's page opened while
+    /// the game downloaded found no program yet, and that answer stood until the app restarted, so the per-program
+    /// settings, Display mode among them, stayed hidden once the install finished (one way the switch went missing
+    /// after a reinstall in highball-db#429).
+    private func forgetProgramExecutables() {
+        executableCache.removeAll()
+        executableMisses.removeAll()
+    }
     func programExecutable(for item: LibraryItem) -> URL? {
         if let hit = executableCache[item.id] { return hit }
         if executableMisses.contains(item.id) { return nil }
