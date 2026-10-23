@@ -2732,6 +2732,18 @@ final class AppState {
         }
     }
 
+    /// A game folder on a drive that keeps Mac metadata in `._` files beside each file (exFAT, FAT,
+    /// some network shares) shows the game those files as its own: Alice: Madness Returns failed on
+    /// the 4,407 in a Steam library on an exFAT drive, and a reinstall brought them back
+    /// (highball-db#429). The ones beside the game's files go before each launch, off the main
+    /// thread; a folder on APFS is not walked.
+    private func removeMacMetadataFiles(from folder: URL?, of title: String) async {
+        guard let folder else { return }
+        let removed = await Task.detached { AppleDouble.cleanGameFolder(folder) }.value
+        guard removed > 0 else { return }
+        appendLog("Removed \(removed) macOS '._' files from \(title)'s folder. Its drive keeps Mac metadata in them, and the game would read them as files of its own.")
+    }
+
     /// Launch a Steam game by appid through the bottle's Steam client.
     func launchGame(_ game: SteamGame, in bottle: Bottle, renderer preferred: Renderer? = nil) {
         guard let engine = engine(for: bottle) else { return }
@@ -2750,6 +2762,8 @@ final class AppState {
         // The variables this game's recipe scoped to it (highball#198); other games get none of them.
         let gameEnvironment = bottle.settings.environment(forGame: entry?.id)
         let markers = SessionWatch.markers(installdir: game.installdir)
+        let folder = game.installdir.isEmpty ? nil : game.installFolder
+            ?? bottle.driveC.appending(path: "Program Files (x86)/Steam/steamapps/common/\(game.installdir)", directoryHint: .isDirectory)
         // The busy sheet covers the start only: Steam's client outlives the game and its launch
         // call says nothing about it, so the game's own processes decide when "starting" ends
         // and a session begins, and the app is free while the game runs (UX plan 0.6).
@@ -2758,6 +2772,7 @@ final class AppState {
                 stop: .killBottle(bottle, label: L("Stop"))) { [self] in
             let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
             await adoptRuntimesInstalledByGames(in: bottle, engine: engine)
+            await removeMacMetadataFiles(from: folder, of: game.name)
             // A running client would serve the launch with its own environment; when that is
             // not the game's, cold-start first: never under a running game, Steam's or not.
             // A kept client is said out loud, in the activity log and in the launch log's header:
@@ -3060,8 +3075,10 @@ final class AppState {
             fail(HighballError.failed("\(game.app_title) is already running."))
             return
         }
+        let folder = epicInstalls[game.app_name].map { URL(fileURLWithPath: $0, isDirectory: true) }
         runBusy("Starting \(game.app_title)", done: .handedOff, stop: .killBottle(bottle, label: L("Stop"))) { [self] in
             let store = epicStore
+            await removeMacMetadataFiles(from: folder, of: game.app_title)
             // Fresh single-use token, fetched off the main thread right before launch.
             let info = try await Task.detached { try store.launchInfo(game.app_name) }.value
             let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
