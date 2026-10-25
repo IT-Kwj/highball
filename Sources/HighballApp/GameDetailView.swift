@@ -11,10 +11,16 @@ struct GameDetailView: View {
     @State private var expandedDescription = false
     @State private var selectedGalleryURL: URL?
     @State private var choseGalleryImage = false
-    /// The launch arguments being typed; saved on Return and when the page closes, so a space
-    /// typed between two arguments is not normalised away mid-word.
+    /// The launch arguments being typed; saved on Return, on Play and when the page closes, so a
+    /// space typed between two arguments is not normalised away mid-word.
     @State private var argsText = ""
     @State private var argsLoaded = false
+    /// Saves a line still being typed, so the Play that follows launches with it. Skipped until the
+    /// field has loaded, or its empty text would clear the stored arguments.
+    private func commitTypedArguments() {
+        guard argsLoaded else { return }
+        state.setLaunchArguments(argsText, for: item)
+    }
     /// The live row: after an install, a delete or a rename, the passed-in copy goes stale.
     private var item: LibraryItem { state.libraryItems.first { $0.id == passedItem.id } ?? passedItem }
     @State private var showWhy = false
@@ -292,25 +298,25 @@ struct GameDetailView: View {
                 }
             } else if state.prefersMacBuild(item) {
                 // The native build first; a Windows copy in a bottle stays one click away.
-                Button { state.playOnMac(item) } label: {
+                Button { commitTypedArguments(); state.playOnMac(item) } label: {
                     primaryActionLabel(L("Play on Mac"), symbol: "play.fill")
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large).tint(HB.amber)
                 if item.installed {
-                    Button(L("Play the Windows version")) { state.play(item, windowsBuild: true) }
+                    Button(L("Play the Windows version")) { commitTypedArguments(); state.play(item, windowsBuild: true) }
                         .controlSize(.large).disabled(state.busy || blocked)
                 } else {
                     Text(L("Starts through Steam for Mac.")).font(.callout).foregroundStyle(.secondary)
                 }
             } else if item.installed {
-                Button { state.play(item) } label: {
+                Button { commitTypedArguments(); state.play(item) } label: {
                     primaryActionLabel(L("Play"), symbol: "play.fill")
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large).tint(HB.amber)
                 .disabled(state.busy || blocked)
                 if item.installedOnMac {
                     // The row put the Windows build first (a Mac build missing content); the Mac one stays a click away.
-                    Button(L("Play on Mac")) { state.playOnMac(item) }.controlSize(.large)
+                    Button(L("Play on Mac")) { commitTypedArguments(); state.playOnMac(item) }.controlSize(.large)
                 } else {
                     Text(!blocked ? L("Highball will ask how it went when you finish.")
                          : entry?.status == "blocked-publisher" ? L("Its publisher stops it on macOS on purpose.")
@@ -558,7 +564,7 @@ struct GameDetailView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 Text(L("Also installed in")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
                                 Text(other).font(.callout)
-                                Button(L("Play there")) { state.play(item.homed(in: other)) }.controlSize(.small)
+                                Button(L("Play there")) { commitTypedArguments(); state.play(item.homed(in: other)) }.controlSize(.small)
                             }
                         }
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
