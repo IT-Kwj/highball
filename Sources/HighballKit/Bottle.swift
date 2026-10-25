@@ -769,6 +769,13 @@ public struct Bottle: Sendable {
         // CrossOver switch the engine's winemac.so carries adds the bit for them (Tomb Raider IV-VI
         // Remastered, highball#136). It touches nothing that succeeded before.
         env["CX_FWD_COMPAT_GL_CTX"] = "1"
+        // MoltenVK prints its whole extension list, about 160 lines, at info level each time a
+        // process makes a Vulkan instance, and a Steam launch makes dozens. The end of the log,
+        // where a crash lands, was more of that list, so the reports' digests and the logs players
+        // paste ended before the failure (highball#486, #490, #492, Portal 2 on Discord). Warnings
+        // and errors stay, our patches' markers among them, and a level the engine or the player
+        // sets wins.
+        if env["MVK_CONFIG_LOG_LEVEL"] == nil { env["MVK_CONFIG_LOG_LEVEL"] = "2" }
         let r = effective
         // The async toggle travels in the generated dxvk.conf, NOT the DXVK_ASYNC env var:
         // the async fork reads `env == "1" || config.enableAsync`, so an env 1 can never be
