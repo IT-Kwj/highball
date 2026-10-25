@@ -223,4 +223,12 @@ final class EngineArchTests: XCTestCase {
         let intel = InstalledEngine(manifest: manifest("x86_64", requires: ["rosetta2"]), root: tempRoot("x64-engine"))
         XCTAssertEqual(try bottle.environment(engine: intel, renderer: .wined3d)["ROSETTA_ADVERTISE_AVX"], "1")
     }
+
+    func testMoltenVKLogsWarningsNotItsExtensionList() throws {
+        var bottle = Bottle(url: URL(fileURLWithPath: "/tmp/hb-arch-test-bottle"), settings: BottleSettings(name: "t", engineID: "x64-test-r1"))
+        let intel = InstalledEngine(manifest: manifest("x86_64", requires: ["rosetta2"]), root: tempRoot("x64-engine"))
+        XCTAssertEqual(try bottle.environment(engine: intel, renderer: .wined3d)["MVK_CONFIG_LOG_LEVEL"], "2", "warnings and errors only")
+        bottle.settings.environment["MVK_CONFIG_LOG_LEVEL"] = "3"
+        XCTAssertEqual(try bottle.environment(engine: intel, renderer: .wined3d)["MVK_CONFIG_LOG_LEVEL"], "3", "a player's own level wins")
+    }
 }
