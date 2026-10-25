@@ -46,11 +46,15 @@ public enum EngineIntegrity {
     }
 
     /// Of the DLLs Wine could not find, its own that are absent from this engine on disk.
-    /// Empty when the engine is intact, which is the normal answer.
+    /// Empty when the engine is intact, which is the normal answer. Every engine ships each of
+    /// `builtins` in both halves (all 31 on the M4, x86-64 and arm64, 2026-10-25), and a 32-bit
+    /// program only ever loads the 32-bit copy, so a name missing from either half counts:
+    /// SteamSetup.exe died on missing 32-bit shcore.dll and combase.dll while the 64-bit copies
+    /// made the engine look whole, and the app offered a fresh installer again (highball#494).
     public static func gone(fromEngineAt root: URL, notFound: [String], arch: String = "x86_64") -> [String] {
         let dirs = libraryDirectories(engineRoot: root, arch: arch)
         return notFound.filter { name in
-            builtins.contains(name) && !dirs.contains { FileManager.default.fileExists(atPath: $0.appending(path: name).path) }
+            builtins.contains(name) && !dirs.allSatisfy { FileManager.default.fileExists(atPath: $0.appending(path: name).path) }
         }
     }
 

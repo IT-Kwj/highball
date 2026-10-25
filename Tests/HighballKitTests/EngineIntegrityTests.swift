@@ -34,7 +34,8 @@ final class EngineIntegrityTests: XCTestCase {
     }
 
     func testOnlyWineOwnDllsAbsentFromTheEngineCount() throws {
-        let root = try engineTree(shipping: ["ole32.dll", "shell32.dll"])
+        let all = ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"]
+        let root = try engineTree(shipping: all, shipping32: ["ole32.dll", "shell32.dll"])
         // shcore/shlwapi/combase are gone from the engine; ole32 and shell32 are still there,
         // so their "not found" lines are the loader's fallout, not more missing files.
         XCTAssertEqual(EngineIntegrity.gone(fromEngineAt: root, notFound: EngineIntegrity.librariesNotFound(in: output)),
@@ -42,13 +43,21 @@ final class EngineIntegrityTests: XCTestCase {
     }
 
     func testAnIntactEngineReportsNothing() throws {
-        let root = try engineTree(shipping: ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"])
+        let all = ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"]
+        let root = try engineTree(shipping: all, shipping32: all)
         XCTAssertEqual(EngineIntegrity.gone(fromEngineAt: root, notFound: EngineIntegrity.librariesNotFound(in: output)), [])
     }
 
-    func testThe32BitHalfCountsAsShipping() throws {
-        let root = try engineTree(shipping: [], shipping32: ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"])
-        XCTAssertEqual(EngineIntegrity.gone(fromEngineAt: root, notFound: EngineIntegrity.librariesNotFound(in: output)), [])
+    /// highball#494: the 32-bit SteamSetup.exe died on missing 32-bit copies while the 64-bit ones
+    /// were there, and the app took the engine for whole and offered a fresh installer again.
+    func testAHalfMissingCounts() throws {
+        let all = ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"]
+        let lost32 = try engineTree(shipping: all, shipping32: ["shlwapi.dll", "shell32.dll", "ole32.dll"])
+        XCTAssertEqual(EngineIntegrity.gone(fromEngineAt: lost32, notFound: EngineIntegrity.librariesNotFound(in: output)),
+                       ["shcore.dll", "combase.dll"])
+        let lost64 = try engineTree(shipping: [], shipping32: all)
+        XCTAssertEqual(EngineIntegrity.gone(fromEngineAt: lost64, notFound: EngineIntegrity.librariesNotFound(in: output)),
+                       ["shcore.dll", "shlwapi.dll", "shell32.dll", "combase.dll", "ole32.dll"])
     }
 
     func testTheAlertNamesTheFilesAndOffersTheEngineBack() {
