@@ -71,6 +71,18 @@ final class LaunchChecksTests: XCTestCase {
         XCTAssertNil(Pin(name: "x", path: "x.exe").launching(with: nil).renderer, "and with none, the environment decides")
     }
 
+    /// Forza Horizon 6 added by hand ran without its fix's graphics card variables and crashed (highball#486).
+    func testAProgramCarriesItsGamesVariables() {
+        let fix = ["D3DM_VENDOR_ID": "0x10de", "D3DM_DEVICE_ID": "0x2786"]
+        let pin = Pin(name: "Forza Horizon 6", path: "/Users/x/Games/Forza Horizon 6/forzahorizon6.exe",
+                      environment: ["D3DM_DEVICE_ID": "0x56a1", "MY_SETTING": "1"])
+        let env = pin.environment(withGame: fix)
+        XCTAssertEqual(env["D3DM_VENDOR_ID"], "0x10de", "the fix's variable reaches the launch")
+        XCTAssertEqual(env["D3DM_DEVICE_ID"], "0x56a1", "the program's own setting wins over the fix")
+        XCTAssertEqual(env["MY_SETTING"], "1")
+        XCTAssertEqual(Pin(name: "x", path: "x.exe").environment(withGame: [:]), [:], "no game, nothing added")
+    }
+
     /// A DualSense player had "Controllers through SDL" installed and no way back but regedit.
     func testRegistryOnlyTweaksCanBeRemoved() throws {
         let sdl = try JSONDecoder.highball.decode(Recipe.self, from: Data("""

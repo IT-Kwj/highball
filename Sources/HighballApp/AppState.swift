@@ -2559,13 +2559,17 @@ final class AppState {
         let steamFirstBoot = isSteamUI(pin) && !FileManager.default.fileExists(
             atPath: bottle.driveC.appending(path: "Program Files (x86)/Steam/bin/cef").path)
         let cef = bottle.driveC.appending(path: "Program Files (x86)/Steam/bin/cef")
+        // The database game the library matches this program to keeps its fix's variables, as its
+        // page says, with the program's own winning (highball#486).
+        let gameID = libraryItems.first(where: { $0.pinID == pin.id }).flatMap { gameDB.entry(for: $0)?.id }
+        let gameEnvironment = pin.environment(withGame: bottle.settings.environment(forGame: gameID))
         runBusy(steamFirstBoot ? L("Starting Steam for the first time — it downloads and unpacks its own client") : "Starting \(pin.name)",
                 expected: steamFirstBoot ? L("usually 15–25 minutes; long quiet stretches are normal") : nil,
                 done: .handedOff,
                 stop: .killBottle(bottle, label: L("Stop")),
                 cleanup: { [weak self] in self?.launchingPins.remove(pin.id) }) { [self] in
             let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
-            var extraEnvironment = [String: String]()
+            var extraEnvironment = gameEnvironment
             // A Steam client left running by a game launch answers a new steam.exe by swallowing
             // it (issue #33). Ask it to show its window instead, and leave the wineserver alone:
             // a game may still be running under it.

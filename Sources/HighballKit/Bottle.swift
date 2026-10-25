@@ -282,6 +282,15 @@ public struct Pin: Codable, Sendable, Identifiable, Hashable {
         return pin
     }
 
+    /// What a launch of this program carries: the variables the database game it is matched to got
+    /// from its fix, then the program's own, which win. A program added by hand ran with its own
+    /// variables only, so its game's page listed the fix's variables as applied while the launch
+    /// dropped them, and Forza Horizon 6 started that way crashed on D3DMetal's default graphics card
+    /// (highball#486).
+    public func environment(withGame gameVariables: [String: String]) -> [String: String] {
+        gameVariables.merging(environment) { $1 }
+    }
+
     /// Where the pin's executable actually lives for a given bottle.
     public func executableURL(driveC: URL) -> URL {
         let named = launchURL(driveC: driveC)
