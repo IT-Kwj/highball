@@ -2674,6 +2674,28 @@ final class AppState {
         } catch { fail(error, bottle: copy) }
     }
 
+    /// Engines Settings offers to remove: not the default, and no environment's engine.
+    var removableEngines: [InstalledEngine] {
+        EngineStore.removableEngines(installed: engines, referencedIDs: Set(bottles.map(\.settings.engineID)),
+                                     defaultID: defaultEngine?.id)
+    }
+
+    /// Removes an engine no environment uses, after the owner confirmed it in Settings. The
+    /// environments are read again from disk first, so one moved onto the engine since the list
+    /// was drawn keeps it.
+    func removeEngine(_ id: String) {
+        guard let engine = removableEngines.first(where: { $0.id == id }) else { return }
+        runBusy(String(format: L("Removing engine %@"), id)) { [self] in
+            let referenced = Set(try bottleStore.list().map(\.settings.engineID))
+            guard !referenced.contains(id) else {
+                throw HighballError.failed("Engine \(id) is used by an environment again, so it stays.")
+            }
+            let root = engine.root
+            try await Task.detached { try FileManager.default.removeItem(at: root) }.value
+            await MainActor.run { self.appendLog("engine \(id) removed from Settings (no environment used it)"); self.refresh() }
+        }
+    }
+
     func deleteBottle(_ name: String) {
         // The row and its Delete item stay on screen for the whole operation, so without this a
         // second click started a second delete and the loser reported "missing" for a delete that

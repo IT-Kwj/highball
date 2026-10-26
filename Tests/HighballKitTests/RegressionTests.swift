@@ -1011,6 +1011,22 @@ extension RegressionTests {
 
     // The same incident, second half: cleanup removed an engine the running build had never heard
     // of. Only the superseded default may go, and only when nothing runs on it.
+    /// Hayden (Discord, 2026-10-23): no way to clear old engines out. Settings offers the ones no
+    /// environment uses, never the default, oldest first.
+    func testSettingsOffersOnlyEnginesNoEnvironmentUses() throws {
+        func engine(_ id: String) throws -> InstalledEngine {
+            let json = #"{"id":"\#(id)","displayName":"e","arch":"x86_64","minMacOS":"14.0","components":{}}"#
+            return InstalledEngine(manifest: try JSONDecoder().decode(EngineManifest.self, from: Data(json.utf8)),
+                                   root: URL(fileURLWithPath: "/tmp/\(id)"))
+        }
+        let all = try ["x64-sikarugir10.0_6-r28", "x64-sikarugir10.0_6-r5", "x64-crossover26.3-r27", "x64-sikarugir10.0_6-r21"].map(engine)
+        let removable = EngineStore.removableEngines(installed: all, referencedIDs: ["x64-crossover26.3-r27"],
+                                                     defaultID: "x64-sikarugir10.0_6-r28").map(\.id)
+        XCTAssertEqual(removable, ["x64-sikarugir10.0_6-r5", "x64-sikarugir10.0_6-r21"], "unused, oldest first")
+        XCTAssertTrue(EngineStore.removableEngines(installed: all, referencedIDs: Set(all.map(\.id)), defaultID: nil).isEmpty,
+                      "every engine in use: nothing to offer")
+    }
+
     func testUpdateRemovesOnlyTheEngineItSuperseded() throws {
         func engine(_ id: String) throws -> InstalledEngine {
             let json = #"{"id":"\#(id)","displayName":"e","arch":"x86_64","minMacOS":"14.0","components":{}}"#

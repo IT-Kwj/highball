@@ -240,6 +240,8 @@ struct EnginePane: View {
     /// The updater delegate reads the same key: AppStorage so the switch redraws when flipped.
     @AppStorage(UpdateChannels.betaDefaultsKey) private var betaUpdates = false
     @State private var showLicense = false
+    @State private var pendingRemove: String?
+    @State private var engineSizes: [String: String] = [:]
 
     var body: some View {
         @Bindable var state = state
@@ -295,10 +297,42 @@ struct EnginePane: View {
                 Text(String(format: L("Installed engines: %@. An environment's engine is chosen on its own page."), state.engines.map(\.id).joined(separator: ", ")))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            let removable = state.removableEngines
+            if !removable.isEmpty {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L("Engines no environment uses")).font(.headline)
+                        ForEach(removable, id: \.id) { engine in
+                            HStack {
+                                Text(engine.id).font(.caption.monospaced())
+                                if let size = engineSizes[engine.id] { Text(size).font(.caption).foregroundStyle(.secondary) }
+                                Spacer()
+                                Button(L("Remove…"), role: .destructive) { pendingRemove = engine.id }
+                                    .controlSize(.small).disabled(state.busy)
+                            }
+                        }
+                        Text(L("Removing one frees its disk space. If a game asks for it again later, Highball downloads it then."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .task(id: removable.map(\.id)) {
+                    let roots = removable.map { ($0.id, $0.root) }
+                    let sizes = await Task.detached {
+                        Dictionary(uniqueKeysWithValues: roots.map { ($0.0, ByteCountFormatter.string(fromByteCount: EngineStore.diskBytes(of: $0.1), countStyle: .file)) })
+                    }.value
+                    engineSizes = sizes
+                }
+            }
             Spacer()
         }
         .padding(20)
         .sheet(isPresented: $showLicense) { GPTKLicenseSheet() }
+        .confirmationDialog(String(format: L("Remove engine %@? No environment uses it."), pendingRemove ?? ""),
+                            isPresented: .init(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button(L("Remove"), role: .destructive) { if let id = pendingRemove { state.removeEngine(id) }; pendingRemove = nil }
+            Button(L("Cancel"), role: .cancel) { pendingRemove = nil }
+        }
     }
 }
 
