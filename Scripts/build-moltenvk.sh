@@ -33,6 +33,9 @@ fi
 # shadowed memory back to the game's pages when a submission completes, so a 32-bit game's readbacks stop being
 # stale; MVK_PATCHES="shadow-import shadow-readback" built moltenvk-1.4.1-shadow-import-1-shadow-readback-1, published
 # in the engine-components release and not yet referenced by any engine manifest.
+# device-memory-cap (2026-10-27, highball#398) goes last: HB_MVK_DEVICE_MEMORY_PERCENT caps the device-local heap
+# and its budget at that share of the Mac's memory, so a game that sizes its streaming from them stops growing
+# into swap. Inert unless the variable is set. The .github/workflows/build-moltenvk.yml job runs this script.
 read -r -a PATCH_NAMES <<< "${MVK_PATCHES:-shadow-import linear-fallback}"
 for NAME_ in "${PATCH_NAMES[@]}"; do
   PATCH="$PATCHES/moltenvk-$NAME_.patch"

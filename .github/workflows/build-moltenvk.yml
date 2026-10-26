@@ -1,0 +1,60 @@
+# Builds the x86_64 MoltenVK the Intel engines ship (Scripts/build-moltenvk.sh) on a GitHub
+# runner, so a rebuild needs no Mac with gigabytes free. A pull request that touches the patches
+# or the script builds the Wine 11 set as a check; publishing is manual dispatch only. Nothing
+# reaches a player until an engine manifest names the archive this makes.
+name: build-moltenvk
+on:
+  pull_request:
+    paths:
+      - "spike/patches/moltenvk-*.patch"
+      - "Scripts/build-moltenvk.sh"
+      - ".github/workflows/build-moltenvk.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "MoltenVK tag"
+        default: "v1.4.2"
+      patches:
+        description: "MVK_PATCHES, in the order they apply"
+        default: "shadow-import linear-fallback shadow-readback device-memory-cap"
+      publish:
+        description: "Upload the archive to the engine-components release"
+        type: boolean
+        default: false
+permissions:
+  contents: write   # the optional publish step uploads to a release
+jobs:
+  build:
+    # The shipped 1.4.2 dylib was built against the macOS 26.5 SDK, and MoltenVK turns
+    # Metal features on by the SDK it sees, so this takes the newest Xcode 26 the image has.
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: xcode
+        run: |
+          set -euo pipefail
+          ls -d /Applications/Xcode_26*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: build
+        env:
+          MVK_PATCHES: ${{ inputs.patches || 'shadow-import linear-fallback shadow-readback device-memory-cap' }}
+        run: Scripts/build-moltenvk.sh "${{ inputs.tag || 'v1.4.2' }}" "$RUNNER_TEMP/out"
+      - name: sdk and markers
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP"/out/moltenvk-*.tar.gz -C "$RUNNER_TEMP"
+          otool -l "$RUNNER_TEMP/libMoltenVK.dylib" | grep -A5 LC_BUILD_VERSION | grep -E "minos|sdk"
+          lipo -archs "$RUNNER_TEMP/libMoltenVK.dylib"
+          strings -a "$RUNNER_TEMP/libMoltenVK.dylib" | grep -o "HIGHBALL [a-z-]*" | sort -u
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moltenvk
+          path: ${{ runner.temp }}/out/*.tar.gz
+      - name: publish
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # No --clobber: an archive name already in the release is never replaced.
+        run: gh release upload engine-components "$RUNNER_TEMP"/out/moltenvk-*.tar.gz
