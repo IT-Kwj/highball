@@ -577,6 +577,22 @@ public struct RecipeRunner: Sendable {
                 try await runner.regAdd(key: key, name: name, type: type, data: data)
             case let .winetricks(verbs, _):
                 guard let wt = engine.winetricks else { throw HighballError.missing("winetricks in engine \(engine.id)") }
+                // winetricks ends its verbs with `wineserver -w`, which waits for every Windows program in the
+                // environment to end, so with a Steam window open the step never finished once it could start
+                // (measured on the M4, 2026-10-26: `winetricks win10` beside a running program still waited after
+                // 90 s, 28 s alone). The Steam client is stopped the way Play stops it, then the environment when
+                // only Wine's own processes are left, and a program the owner started stops the step with a
+                // message instead of a wait without end.
+                if ProcessTable.liveServer(forPrefix: bottle.url) != nil {
+                    try? await runner.stopSteam()
+                    // Steam's web helpers can outlive the client by a moment.
+                    for _ in 0..<10 where !ProcessTable.isIdle(prefix: bottle.url) { try await Task.sleep(for: .milliseconds(500)) }
+                    guard ProcessTable.isIdle(prefix: bottle.url) else {
+                        throw HighballError.failed("A program is still running in \(bottle.name), and Windows components install only once it has closed. Quit it, or use Stop all processes, then try again.")
+                    }
+                    _ = try? runner.kill()
+                    log?("[\(recipe.id)] stopped \(bottle.name) first, since winetricks waits for every program in it to end")
+                }
                 // WINE_BIN/WINESERVER_BIN/WINE_BINDIR are winetricks' own overrides for setups where
                 // its binary detection fails; without them dotnet48 and friends abort on this engine
                 // (verified 2026-08-25, issue #16). bash rather than sh for the same reason winetricks
