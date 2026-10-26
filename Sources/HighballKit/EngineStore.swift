@@ -150,6 +150,29 @@ public struct EngineStore: Sendable {
         return installed.first { $0.id == oldID }
     }
 
+    /// The engines the owner may remove from Settings: installed, not the default, and no
+    /// environment's engine. Only the engine an update supersedes goes on its own
+    /// (engineToRemoveAfterUpdate), so every other one stayed until the folder was cleared by hand
+    /// (Hayden asked for a way on Discord, 2026-10-23). A recipe that asks for one again
+    /// downloads it then. Oldest first.
+    public static func removableEngines(installed: [InstalledEngine], referencedIDs: Set<String>,
+                                        defaultID: String?) -> [InstalledEngine] {
+        installed.filter { $0.id != defaultID && !referencedIDs.contains($0.id) }
+            .sorted { $0.id.compare($1.id, options: .numeric) == .orderedAscending }
+    }
+
+    /// The bytes an engine's folder takes on disk, for the Settings row. Zero when it can't be read.
+    public static func diskBytes(of root: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in walk {
+            guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            total += Int64(values.totalFileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
     /// The engine to offer when a program fails on `currentID`: the default engine when the
     /// bottle is not on it (the newer one, usually), else the newest other installed engine.
     /// nil with a single engine installed.
