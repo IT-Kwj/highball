@@ -1,5 +1,5 @@
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
-index dab10d9..8404068 100644
+index dab10d9..ca05b5e 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
 @@ -3431,9 +3431,32 @@ static uint32_t mvkGetEntryProperty(io_registry_entry_t entry, CFStringRef prope
@@ -19,7 +19,7 @@ index dab10d9..8404068 100644
 +		long pct = strtol(val, nullptr, 10);
 +		if (pct < 1 || pct > 100) { return (uint64_t)0; }
 +		uint64_t sysMem = mvkGetSystemMemorySize();
-+		uint64_t capped = sysMem / 100 * (uint64_t)pct;
++		uint64_t capped = sysMem * (uint64_t)pct / 100;
 +		MVKBaseObject::reportMessage(nullptr, MVK_CONFIG_LOG_LEVEL_WARNING,
 +									 "HIGHBALL device-memory-cap: device memory reported as %llu MB, %ld%% of the Mac's %llu MB.",
 +									 (unsigned long long)(capped / MEBI), pct, (unsigned long long)(sysMem / MEBI));
