@@ -1,0 +1,57 @@
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+index dab10d9..ca05b5e 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -3431,9 +3431,32 @@ static uint32_t mvkGetEntryProperty(io_registry_entry_t entry, CFStringRef prope
+ #endif
+ }
+ 
++// HIGHBALL device-memory-cap: on a Mac the GPU and the CPU share the same RAM, and MoltenVK reports all of
++// it as the device-local heap, with about three quarters of it as the budget. A game that sizes its texture
++// streaming from those numbers keeps adding graphics memory on top of its own until macOS swaps (Red Dead
++// Redemption 2 grew past 19 GB on a 24 GB Mac, highball#398). HB_MVK_DEVICE_MEMORY_PERCENT caps both at that
++// share of the Mac's memory, the way a PC's graphics card has its own smaller VRAM. Allocations themselves are
++// not limited. Unset, or outside 1 to 100, nothing changes.
++static uint64_t mvkHighballDeviceMemoryCap() {
++	static const uint64_t cap = [] {
++		const char* val = getenv("HB_MVK_DEVICE_MEMORY_PERCENT");
++		if ( !val || !*val ) { return (uint64_t)0; }
++		long pct = strtol(val, nullptr, 10);
++		if (pct < 1 || pct > 100) { return (uint64_t)0; }
++		uint64_t sysMem = mvkGetSystemMemorySize();
++		uint64_t capped = sysMem * (uint64_t)pct / 100;
++		MVKBaseObject::reportMessage(nullptr, MVK_CONFIG_LOG_LEVEL_WARNING,
++									 "HIGHBALL device-memory-cap: device memory reported as %llu MB, %ld%% of the Mac's %llu MB.",
++									 (unsigned long long)(capped / MEBI), pct, (unsigned long long)(sysMem / MEBI));
++		return capped;
++	}();
++	return cap;
++}
++
+ uint64_t MVKPhysicalDevice::getVRAMSize() {
+ 	if (_hasUnifiedMemory) {
+-		return mvkGetSystemMemorySize();
++		uint64_t cap = mvkHighballDeviceMemoryCap();
++		return cap ? std::min<uint64_t>(mvkGetSystemMemorySize(), cap) : mvkGetSystemMemorySize();
+ 	} else {
+ 		// There's actually no way to query the total physical VRAM on the device in Metal.
+ 		// Just default to using the recommended max working set size (i.e. the budget).
+@@ -3443,11 +3466,15 @@ static uint32_t mvkGetEntryProperty(io_registry_entry_t entry, CFStringRef prope
+ 
+ // If possible, retrieve from the MTLDevice, otherwise from available memory size, or a fixed conservative estimate.
+ uint64_t MVKPhysicalDevice::getRecommendedMaxWorkingSetSize() {
++	uint64_t size;
+ 	if ( [_mtlDevice respondsToSelector: @selector(recommendedMaxWorkingSetSize)]) {
+-		return _mtlDevice.recommendedMaxWorkingSetSize;
++		size = _mtlDevice.recommendedMaxWorkingSetSize;
++	} else {
++		uint64_t freeMem = mvkGetAvailableMemorySize();
++		size = freeMem ? freeMem : 256 * MEBI;
+ 	}
+-	uint64_t freeMem = mvkGetAvailableMemorySize();
+-	return freeMem ? freeMem : 256 * MEBI;
++	uint64_t cap = mvkHighballDeviceMemoryCap();	// HIGHBALL device-memory-cap
++	return cap ? std::min<uint64_t>(size, cap) : size;
+ }
+ 
+ // If possible, retrieve from the MTLDevice, otherwise use the current memory used by this process.
