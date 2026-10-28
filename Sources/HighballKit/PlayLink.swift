@@ -9,6 +9,7 @@ public enum PlayLink {
     public enum Target: Equatable, Sendable {
         case steam(appid: Int)
         case epic(appName: String)
+        case gog(id: String)
         case pin(bottle: String, id: UUID)
         /// A launcher (Steam, Epic, …) by recipe id: `highball://open/launcher/steam`. Opens it,
         /// installing it first if needed (issue #53: Mac icons for launchers too).
@@ -20,6 +21,7 @@ public enum PlayLink {
             switch self {
             case let .steam(appid): return "steam:\(appid)"
             case let .epic(name): return "epic:\(name)"
+            case let .gog(id): return "gog:\(id)"
             case let .pin(bottle, id): return "pin:\(bottle):\(id.uuidString)"
             case let .launcher(id): return "launcher:\(id)"
             }
@@ -32,6 +34,7 @@ public enum PlayLink {
     }
 
     /// Parses `highball://play/steam/620?t=<token>`, `highball://play/epic/<name>?t=...`,
+    /// `highball://play/gog/<product id>?t=...`,
     /// `highball://play/pin/<bottle>/<uuid>?t=...` and `highball://open/launcher/<id>?t=...`.
     /// Anything else is nil: no other action exists behind the scheme.
     public static func parse(_ url: URL) -> Request? {
@@ -51,6 +54,9 @@ public enum PlayLink {
         case "epic":
             guard parts.count == 2, !parts[1].isEmpty else { return nil }
             return Request(target: .epic(appName: parts[1]), token: token)
+        case "gog":
+            guard parts.count == 2, !parts[1].isEmpty, parts[1].allSatisfy(\.isNumber) else { return nil }
+            return Request(target: .gog(id: parts[1]), token: token)
         case "pin":
             guard parts.count == 3, !parts[1].isEmpty, let id = UUID(uuidString: parts[2]) else { return nil }
             return Request(target: .pin(bottle: parts[1], id: id), token: token)
@@ -65,6 +71,7 @@ public enum PlayLink {
         switch target {
         case let .steam(appid): c.path = "/steam/\(appid)"
         case let .epic(name): c.path = "/epic/\(name)"
+        case let .gog(id): c.path = "/gog/\(id)"
         case let .pin(bottle, id): c.path = "/pin/\(bottle)/\(id.uuidString)"
         case let .launcher(id): c.host = "open"; c.path = "/launcher/\(id)"
         }
@@ -75,6 +82,7 @@ public enum PlayLink {
     public static func target(for item: LibraryItem) -> Target? {
         if let appid = item.steamAppID { return .steam(appid: appid) }
         if let name = item.epicAppName { return .epic(appName: name) }
+        if let id = item.gogID { return .gog(id: id) }
         if let id = item.pinID, let bottle = item.bottleName { return .pin(bottle: bottle, id: id) }
         return nil
     }

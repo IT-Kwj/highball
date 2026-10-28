@@ -123,7 +123,9 @@ struct BottleView: View {
         VStack(alignment: .leading, spacing: 12) {
             HB.eyebrow(L("Launchers"))
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 108, maximum: 140), spacing: 12)], spacing: 12) {
-                ForEach(Self.launcherMeta, id: \.id) { meta in
+                // GOG Galaxy's blocked client gives way to Connect GOG, as in Add games, unless
+                // this environment already has it.
+                ForEach(Self.launcherMeta.filter { $0.id != "gog-galaxy" || bottle.settings.recipes.contains($0.id) }, id: \.id) { meta in
                     if let recipe = AppState.recipe(meta.id) {
                         let installed = bottle.settings.recipes.contains(meta.id)
                         let pin = bottle.settings.pins.first { $0.name.lowercased().hasPrefix(meta.short.lowercased().prefix(5)) }
@@ -759,6 +761,125 @@ struct EpicSignInSheet: View {
             }
         }
         .padding(24)
+    }
+}
+
+
+/// GOG sign-in, written for someone who has never copied a link: GOG's own page in the browser,
+/// which ends on an almost empty embed.gog.com page whose link carries a one-time code. Each step
+/// says what to click and what the player will see. Pasting the link connects at once; the sheet
+/// stays open while it does, and says what went wrong in place, so a bad paste or an expired
+/// link is fixed without hunting for the button again.
+struct GOGSignInSheet: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
+    @State private var pasted = ""
+    @State private var connecting = false
+    @State private var problem: String?
+
+    var body: some View {
+        let reading = GOGStore.readSignIn(pasted)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.gogSignedIn ? L("Your GOG account") : L("Connect your GOG account")).font(.title2.bold())
+                Text(state.gogSignedIn
+                     ? L("To use a different GOG account, follow the steps again and sign in with it. You sign in on GOG's own website, so Highball never sees your password.")
+                     : L("It takes about a minute. You sign in on GOG's own website, so Highball never sees your password."))
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if state.gogSignedIn {
+                Label(state.gogAccountName.map { String(format: L("Connected as %@"), $0) } ?? L("GOG account connected"),
+                      systemImage: "checkmark.circle.fill").foregroundStyle(HB.good)
+            }
+            step(1, L("Sign in to GOG in your browser.")) {
+                Button(L("Open GOG sign-in")) { NSWorkspace.shared.open(GOGStore.loginURL) }
+            }
+            step(2, L("After you sign in, GOG shows an almost empty page. That is normal: it means it worked."))
+            step(3, L("Copy that page's link: click the address bar at the top of your browser, then press ⌘C."))
+            step(4, L("Come back here and paste it.")) {
+                HStack(spacing: 8) {
+                    PasteButton(payloadType: String.self) { strings in
+                        Task { @MainActor in
+                            pasted = strings.first ?? ""
+                            if GOGStore.authorizationCode(from: pasted) != nil { connect() }
+                        }
+                    }
+                    TextField(L("or paste the link here"), text: $pasted).textFieldStyle(.roundedBorder).frame(width: 240)
+                        .onSubmit { if case .code = reading { connect() } }
+                }
+                .disabled(connecting)
+            }
+            Group {
+                if connecting {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(L("Connecting to GOG…"))
+                    }
+                } else if let problem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(HB.amber)
+                } else if let hint = Self.hint(for: reading) {
+                    Label(hint.text, systemImage: hint.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(hint.ok ? HB.good : HB.amber)
+                }
+            }
+            .font(.callout).frame(maxWidth: 420, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            Text(L("Highball connects through gogdl, the open source tool the Heroic launcher uses. You can disconnect at any time."))
+                .font(.caption).foregroundStyle(.secondary).frame(maxWidth: 420, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                if state.gogSignedIn {
+                    Button(L("Disconnect GOG"), role: .destructive) { dismiss(); state.gogSignOut() }
+                }
+                Spacer()
+                Button(L("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L("Connect")) { connect() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(connecting || GOGStore.authorizationCode(from: pasted) == nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        // A new paste replaces the last problem; the field emptied after a failure keeps it shown.
+        .onChange(of: pasted) { _, new in if !new.isEmpty { problem = nil } }
+    }
+
+    /// One numbered instruction, with the control it needs (if any) under its text.
+    private func step(_ number: Int, _ text: String, @ViewBuilder control: () -> some View = { EmptyView() }) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(number)").font(.callout.weight(.semibold).monospacedDigit())
+                .frame(width: 20, height: 20).background(Circle().fill(.quaternary))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text).fixedSize(horizontal: false, vertical: true)
+                control()
+            }
+        }
+    }
+
+    private func connect() {
+        guard !connecting, let code = GOGStore.authorizationCode(from: pasted) else { return }
+        connecting = true
+        problem = nil
+        Task {
+            do {
+                try await state.gogConnect(code: code)
+                dismiss()
+            } catch {
+                connecting = false
+                problem = L(AppState.message(for: error))   // the kit's sign-in messages have French entries
+                pasted = ""
+            }
+        }
+    }
+
+    /// What the sheet says about the pasted text; nothing while it is empty.
+    static func hint(for reading: GOGStore.PastedSignIn) -> (text: String, ok: Bool)? {
+        switch reading {
+        case .empty: nil
+        case .code: (L("That is the right link. Click Connect."), true)
+        case .signInPage: (L("That is the link of the sign-in page. Sign in on that page first, then copy the link of the almost empty page you land on."), false)
+        case .noCode: (L("That is a GOG page, but not the right one. Copy the link of the almost empty page GOG shows right after you sign in."), false)
+        case .notGOG: (L("That does not look like a link from GOG. Copy the link of the almost empty page GOG shows after you sign in."), false)
+        }
     }
 }
 

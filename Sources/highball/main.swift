@@ -7,7 +7,7 @@ struct Highball: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "highball",
         abstract: "Highball — run Windows games on Apple Silicon. Free, open, engine-agnostic.",
-        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, Report.self, BugReportCommand.self, Verify.self],
+        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, GOG.self, Report.self, BugReportCommand.self, Verify.self],
         defaultSubcommand: nil
     )
 }
@@ -731,6 +731,157 @@ struct Epic: AsyncParsableCommand {
                                                 renderer: renderer, extraEnvironment: info.environment,
                                                 workingDirectory: info.workingDirectory)
             print("exit=\(result.exitStatus) — log: \(result.log.path)")
+        }
+    }
+}
+
+struct GOG: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "gog",
+        abstract: "Install and play GOG games through gogdl, with comet for achievements and gogdl for cloud saves (GOG Galaxy cannot sign in under Wine).",
+        subcommands: [Login.self, Auth.self, List.self, Install.self, Launch.self])
+
+    struct Login: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Print the GOG sign-in URL; paste the address it ends on into 'highball gog auth'.")
+        func run() async throws {
+            try await GOGStore().ensureInstalled()
+            print("1. Open: \(GOGStore.loginURL.absoluteString)")
+            print("2. Sign in. GOG ends on a mostly blank embed.gog.com page: copy its whole address.")
+            print("3. Run: highball gog auth, and paste the address when asked.")
+        }
+    }
+
+    struct Auth: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Finish sign-in with the address (or the code) the login page ended on; asks for it when not given, which keeps it out of shell history.")
+        @Argument var pasted: String?
+        func run() async throws {
+            let store = GOGStore()
+            try await store.ensureInstalled()
+            var text = pasted
+            if text == nil {
+                print("Paste the address GOG's sign-in page ended on: ", terminator: "")
+                text = readLine()
+            }
+            let reading = GOGStore.readSignIn(text ?? "")
+            guard case let .code(code) = reading else {
+                switch reading {
+                case .signInPage: fail("that is the sign-in page itself; log in on it, then paste the address of the page it ends on")
+                case .noCode: fail("that GOG address has no code; paste the address shown right after you log in")
+                default: fail("no code in that; paste the whole embed.gog.com address")
+                }
+            }
+            try store.authenticate(code: code)
+            print("signed in\(store.username.map { " as \($0)" } ?? "")")
+        }
+    }
+
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List the account's games, and where each installed one lives.")
+        func run() async throws {
+            let store = GOGStore()
+            try await store.ensureInstalled()
+            guard store.isAuthenticated else { fail("not signed in — run 'highball gog login' first") }
+            var installed: [String: String] = [:]
+            for b in (try? BottleStore().list()) ?? [] {
+                for g in GOGStore.installedGames(driveC: b.driveC) { installed[g.id] = b.name }
+            }
+            for g in try await store.ownedGames() {
+                let mark = installed[g.id].map { "[installed: \($0)] " } ?? ""
+                print("\(mark)\(g.id)\t\(g.title)")
+            }
+        }
+    }
+
+    struct Install: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Download a game's Windows build into a bottle (drive_c/Games) and run its GOG setup.")
+        @Argument var bottle: String
+        @Argument(help: "Product id from 'highball gog list'.") var id: String
+        func run() async throws {
+            let store = GOGStore()
+            try await store.ensureInstalled()
+            guard store.isAuthenticated else { fail("not signed in — run 'highball gog login' first") }
+            let b = try BottleStore().get(bottle)
+            let info = try store.info(id)
+            let language = GOGStore.language(for: info.languages)
+            if !info.dependencies.isEmpty { _ = try? store.downloadRedists(info.dependencies) { print($0) } }
+            let status = try store.install(id, into: b, language: language) { line in
+                if !line.contains("[PROGRESS]") || line.contains("= Progress:") { print(line) }
+            }
+            guard status == 0, store.downloadCompleted(id) else { fail("gogdl download did not finish (exit \(status)); run the same command to resume") }
+            guard let game = GOGStore.installedGames(driveC: b.driveC).first(where: { $0.id == id }) else { fail("downloaded, but no goggame-\(id).info turned up in \(b.name)") }
+            store.keepManifest(for: game)
+            let eng = try EngineStore().engine(b.settings.engineID)
+            let runner = WineRunner(engine: eng, bottle: b)
+            try await store.runSetup(game, language: language, runner: runner,
+                                     onStep: { n, total, label in print("setup \(n)/\(total): \(label)") },
+                                     onFailure: { label, code in print("setup: \(label) ended with code \(code); carrying on") })
+            print("installed \(game.title) into \(b.name): \(game.folder.path)")
+        }
+    }
+
+    struct Launch: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Launch an installed GOG game in a bottle, with comet and cloud saves unless turned off.")
+        @Argument var bottle: String
+        @Argument var id: String
+        @Option var renderer: HighballKit.Renderer?
+        @Flag(help: "Run without comet (no achievements).") var noComet = false
+        @Flag(help: "Skip the cloud-save sync before and after.") var noSaves = false
+        func run() async throws {
+            let store = GOGStore()
+            let b = try BottleStore().get(bottle)
+            guard let game = GOGStore.installedGames(driveC: b.driveC).first(where: { $0.id == id }),
+                  let task = game.launchTask(choice: GOGSettings.load(store).launchChoice[id]),
+                  let launch = GOGStore.launch(task, in: game) else { fail("GOG game \(id) is not installed in \(b.name)") }
+            let eng = try EngineStore().engine(b.settings.engineID)
+            let runner = WineRunner(engine: eng, bottle: b)
+            let saves = GOGSaves(store: store)
+            let settings = GOGSettings.load(store)   // the game page's choices hold here too
+            var folders: [(GOGSaves.Location, URL)] = []
+            if !noSaves, !settings.cloudSavesOff.contains(id), store.isAuthenticated, let client = saves.clientID(for: game), let locations = try? saves.locations(clientID: client) {
+                folders = locations.compactMap { l in GOGSaves.resolve(l.template, game: game, driveC: b.driveC).map { (l, $0) } }
+                for (l, f) in folders { print("saves \(l.name) down: \(Self.describe(saves.sync(game, location: l, folder: f, direction: .download)))") }
+            }
+            var comet: Process?
+            if !noComet, settings.cometOff[id] == nil, store.isAuthenticated {
+                if let tools = try? await store.ensureComet() { _ = try? await GOGComet.installService(from: tools.service, runner: runner) }
+                let log = HighballPaths().logs.appending(path: "comet-\(id).log")
+                comet = try? GOGComet(store: store).start(log: log)
+                print(comet != nil ? "comet running (log \(log.path))" : "comet did not start; playing without achievements")
+            }
+            let result: LaunchResult
+            do {
+                result = try await runner.start(launch.executable, arguments: launch.arguments, renderer: renderer,
+                                                workingDirectory: launch.workingDirectory)
+            } catch {
+                GOGComet(store: store).stop(comet)   // it would hold port 9977 and its copy of the tokens
+                throw error
+            }
+            print("exit=\(result.exitStatus) — log: \(result.log.path)")
+            // A launcher task hands over to another program in the folder and exits: the session
+            // lasts while any of them runs in this bottle, so comet and the save upload wait for
+            // the game itself.
+            let markers = game.sessionMarkers(launching: launch.executable)
+            var handedOver = false
+            for _ in 0..<5 {   // the program it hands to can take a moment to appear
+                if !SessionWatch.pids(ofPrefix: b.url, markers: markers).isEmpty { handedOver = true; break }
+                try await Task.sleep(for: .seconds(2))
+            }
+            if handedOver {
+                print("the game is still running (handed over from \(launch.executable.lastPathComponent)); waiting for it to close")
+                while !SessionWatch.pids(ofPrefix: b.url, markers: markers).isEmpty {
+                    try await Task.sleep(for: .seconds(2))
+                }
+            }
+            GOGComet(store: store).stop(comet)
+            for (l, f) in folders { print("saves \(l.name) up: \(Self.describe(saves.sync(game, location: l, folder: f, direction: .upload)))") }
+        }
+
+        static func describe(_ outcome: GOGSaves.Outcome) -> String {
+            switch outcome {
+            case .synced: return "synced"
+            case .conflict: return "both copies changed, nothing moved; play from the app to choose which to keep"
+            case .failed(let why): return "failed (\(why))"
+            }
         }
     }
 }

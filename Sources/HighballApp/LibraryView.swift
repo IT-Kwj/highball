@@ -122,6 +122,7 @@ struct LibraryView: View {
             FilterChip(label: L("All"), on: sourceFilter == nil) { sourceFilter = nil }
             FilterChip(label: "Steam", on: sourceFilter == .steam) { sourceFilter = .steam }
             FilterChip(label: "Epic", on: sourceFilter == .epic) { sourceFilter = .epic }
+            FilterChip(label: "GOG", on: sourceFilter == .gog) { sourceFilter = .gog }
             FilterChip(label: L("Programs"), on: sourceFilter == .pin) { sourceFilter = .pin }
             Divider().frame(height: 16)
             FilterChip(label: L("Installed"), on: installedOnly) { installedOnly.toggle() }
@@ -169,22 +170,31 @@ struct LibraryView: View {
                 Text(L("Where are your games?")).font(.title.weight(.semibold))
                 Text(L("Pick one to start. You can add the others any time.")).foregroundStyle(.secondary)
             }
-            HStack(alignment: .top, spacing: 14) {
-                sourceCard(symbol: "gamecontroller.fill", accent: true, title: L("Steam"),
-                           text: L("Install Steam and sign in. Your Steam library shows up here. Its first start takes 15 to 25 minutes."),
-                           button: state.defaultBottle.map(state.steamInstalled) == true ? L("Open Steam") : L("Install Steam")) { state.installSteam() }
-                sourceCard(symbol: "bag.fill", accent: false, title: L("Epic Games"),
-                           text: L("Connect your Epic account. Your games install straight into Highball."),
-                           button: L("Connect Epic")) { state.showEpicSignIn = true }
-                sourceCard(symbol: "folder.fill", accent: false, title: L("A Windows program I have"),
-                           text: L("An installer or game from your Mac. Or drop it onto this window."),
-                           button: L("Choose a file…")) { state.chooseProgramToRun() }
+            // Four cards in a row where the window is wide enough, two by two where it isn't.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 14) { sourceCards }
+                LazyVGrid(columns: [GridItem(.fixed(250), spacing: 14), GridItem(.fixed(250), spacing: 14)], spacing: 14) { sourceCards }
             }
-            Text(L("Battle.net, GOG Galaxy, the EA app, Ubisoft Connect and Rockstar are under Add games."))
+            Text(L("Battle.net, the EA app, Ubisoft Connect and Rockstar are under Add games."))
                 .font(.caption).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 40)
+    }
+
+    @ViewBuilder private var sourceCards: some View {
+        sourceCard(symbol: "gamecontroller.fill", accent: true, title: L("Steam"),
+                   text: L("Install Steam and sign in. Your Steam library shows up here. Its first start takes 15 to 25 minutes."),
+                   button: state.defaultBottle.map(state.steamInstalled) == true ? L("Open Steam") : L("Install Steam")) { state.installSteam() }
+        sourceCard(symbol: "bag.fill", accent: false, title: L("Epic Games"),
+                   text: L("Connect your Epic account. Your games install straight into Highball."),
+                   button: L("Connect Epic")) { state.showEpicSignIn = true }
+        sourceCard(symbol: "g.circle.fill", accent: false, title: "GOG",
+                   text: L("Connect your GOG account. Your games install straight into Highball."),
+                   button: L("Connect GOG")) { state.showGOGSignIn = true }
+        sourceCard(symbol: "folder.fill", accent: false, title: L("A Windows program I have"),
+                   text: L("An installer or game from your Mac. Or drop it onto this window."),
+                   button: L("Choose a file…")) { state.chooseProgramToRun() }
     }
 
     private func sourceCard(symbol: String, accent: Bool, title: String, text: String, button: String, action: @escaping () -> Void) -> some View {
@@ -400,6 +410,7 @@ struct LibraryTile: View {
             if item.installed {
                 Divider()
                 Button(L("Uninstall…"), role: .destructive) { state.askUninstall(item) }
+                    .disabled(state.uninstallWaitsFor(item) != nil)
             }
         }
         .accessibilityLabel("\(item.title), \(item.source.rawValue)\(item.installedOnMac ? ", " + L("Installed in Steam for Mac") : item.installed ? "" : ", " + L("Not installed"))")
@@ -426,7 +437,7 @@ struct SourceBadge: View {
     /// whole badge lit when Steam for Mac has it installed.
     var mac: MacSteamBuild? = nil
     private var label: String {
-        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .pin: "EXE" }
+        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .gog: "GOG"; case .pin: "EXE" }
     }
     private var lit: Bool { mac == .installed }
     var body: some View {

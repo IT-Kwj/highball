@@ -7,7 +7,7 @@ import ImageIO
 // section; the bottle is a per-game property, never the navigation.
 
 public enum LibrarySource: String, Sendable, Codable {
-    case steam, epic, pin
+    case steam, epic, gog, pin
 }
 
 /// A playable item in the unified library. Pure value: no Bottle, no GameDBEntry — the app
@@ -16,16 +16,21 @@ public enum LibrarySource: String, Sendable, Codable {
 public struct LibraryItem: Identifiable, Sendable, Hashable {
     public let source: LibrarySource
     /// Stable identity, also the persistence key in library.json — never change its shape:
-    /// "steam:<appid>" | "epic:<app_name>" | "pin:<bottle>:<uuid>".
+    /// "steam:<appid>" | "epic:<app_name>" | "gog:<product id>" | "pin:<bottle>:<uuid>".
     public let id: String
     public let title: String
-    /// Where it lives. nil only for an Epic title owned but not installed in any bottle.
+    /// Where it lives. nil only for an Epic or GOG title owned but not installed in any bottle.
     public let bottleName: String?
     public let installed: Bool
     /// Steam for Mac has its native build installed (MacSteam); Play goes there first.
     public let installedOnMac: Bool
     public let steamAppID: Int?
     public let epicAppName: String?
+    /// GOG's product id, for a game from the GOG account or a GOG install found on disk.
+    public let gogID: String?
+    /// The Steam app id GOG's database gives the same game: the compatibility database is matched
+    /// by it, never Steam itself (`steamAppID` stays nil, so nothing treats the copy as a Steam one).
+    public let gogSteamAppID: Int?
     public let pinID: UUID?
     public let artworkTall: URL?
     public let artworkWide: URL?
@@ -36,11 +41,12 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
 
     public init(source: LibrarySource, id: String, title: String, bottleName: String?,
                 installed: Bool, installedOnMac: Bool = false, steamAppID: Int? = nil, epicAppName: String? = nil,
-                pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
+                gogID: String? = nil, gogSteamAppID: Int? = nil, pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
                 otherBottles: [String] = [], sizeOnDisk: Int64 = 0, lastPlayed: Date? = nil) {
         self.source = source; self.id = id; self.title = title; self.bottleName = bottleName
         self.installed = installed; self.installedOnMac = installedOnMac
         self.steamAppID = steamAppID; self.epicAppName = epicAppName
+        self.gogID = gogID; self.gogSteamAppID = gogSteamAppID
         self.pinID = pinID; self.artworkTall = artworkTall; self.artworkWide = artworkWide
         self.otherBottles = otherBottles; self.sizeOnDisk = sizeOnDisk; self.lastPlayed = lastPlayed
     }
@@ -58,7 +64,7 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
         let others = (otherBottles.filter { $0 != bottle } + (installed ? [bottleName].compactMap { $0 } : [])).sorted()
         return LibraryItem(source: source, id: id, title: title, bottleName: bottle, installed: holds,
                            installedOnMac: installedOnMac, steamAppID: steamAppID, epicAppName: epicAppName,
-                           pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
+                           gogID: gogID, gogSteamAppID: gogSteamAppID, pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
                            otherBottles: others, sizeOnDisk: holds ? 0 : sizeOnDisk, lastPlayed: lastPlayed)
     }
 }
@@ -88,6 +94,53 @@ public enum LibraryIndex {
         return launcherNames.contains(pin.name.lowercased())
     }
 
+    /// A program added by hand that is a GOG game the library now shows, in the same environment
+    /// (a pin made before Connect GOG, or for a game an offline installer put there): it runs one
+    /// of the game's own launch programs, or a variant beside the main one (Control_DX11.exe next
+    /// to Control.exe). The GOG tile stands for it, so the pin's own tile is left out; the pin
+    /// itself stays in the environment's settings. Anything else in the folder (a settings tool,
+    /// a mod launcher) keeps its tile, and so does a pin with its own variables or graphics mode,
+    /// which the GOG tile could not carry.
+    public struct CoveredPin: Equatable, Sendable {
+        public let pinItemID: String
+        public let gogItemID: String
+        /// The pin's arguments beyond the ones the GOG launch task already passes, for the GOG
+        /// tile's launch arguments (Quake II RTX pinned with +set vid_rtx 0 keeps it).
+        public let extraArguments: [String]
+    }
+
+    public static func gogCoveredPins(bottles: [Bottle], gogInstalledByBottle: [String: [GOGStore.InstalledGame]]) -> [CoveredPin] {
+        var covered: [CoveredPin] = []
+        for bottle in bottles {
+            let games = gogInstalledByBottle[bottle.name] ?? []
+            guard !games.isEmpty else { continue }
+            for pin in bottle.settings.pins where !isLauncherPin(pin) && pin.environment.isEmpty && pin.renderer == nil {
+                let file = pin.launchURL(driveC: bottle.driveC).standardizedFileURL
+                guard let game = games.first(where: { gogLaunches($0, file) }) else { continue }
+                var extra = pin.arguments
+                let taskArguments = game.launchTask().flatMap { GOGStore.launch($0, in: game) }?.arguments ?? []
+                for argument in taskArguments { if let i = extra.firstIndex(of: argument) { extra.remove(at: i) } }
+                covered.append(CoveredPin(pinItemID: "pin:\(bottle.name):\(pin.id.uuidString)", gogItemID: "gog:\(game.id)",
+                                          extraArguments: extra))
+            }
+        }
+        return covered
+    }
+
+    /// Whether `file` is one of the game's launch programs, or a build variant beside the main one.
+    /// Compared without case, as Windows paths are.
+    static func gogLaunches(_ game: GOGStore.InstalledGame, _ file: URL) -> Bool {
+        let path = file.path.lowercased()
+        let programs = game.tasks.filter(\.isFile).compactMap { GOGStore.launch($0, in: game)?.executable.standardizedFileURL }
+        if programs.contains(where: { $0.path.lowercased() == path }) { return true }
+        guard let main = game.launchTask().flatMap({ GOGStore.launch($0, in: game) })?.executable.standardizedFileURL else { return false }
+        // A build variant is the main name plus "_<something>" (Control_DX11, Control_DX12); a
+        // name that merely starts the same (ControlConfig, ControlLauncher) is a tool.
+        let stem = main.deletingPathExtension().lastPathComponent.lowercased()
+        return file.deletingLastPathComponent().path.lowercased() == main.deletingLastPathComponent().path.lowercased()
+            && file.deletingPathExtension().lastPathComponent.lowercased().hasPrefix(stem + "_")
+    }
+
     /// Builds the unified item list. Pure: takes exactly what AppState already holds.
     /// Steam games dedup by appid across bottles — one tile per game, never per install;
     /// the primary bottle is where it was last played, then a ready copy, then name order.
@@ -101,6 +154,8 @@ public enum LibraryIndex {
                              macInstalled: [SteamGame] = [],
                              epicOwned: [EpicStore.Game],
                              epicInstalls: [String: String],
+                             gogGames: [GOGStore.Game] = [],
+                             gogInstalledByBottle: [String: [GOGStore.InstalledGame]] = [:],
                              plays: [String: LibraryStore.PlayRecord] = [:],
                              defaultBottle: String? = nil,
                              pinExists: (Bottle, Pin) -> Bool = { _, _ in true }) -> [LibraryItem] {
@@ -184,13 +239,42 @@ public enum LibraryIndex {
                 lastPlayed: plays[id]?.lastPlayedAt))
         }
 
+        // GOG: one tile per game. Installs are read from disk (GOGStore.installedGames), so a game
+        // an offline installer put in an environment is the GOG game too. Several environments
+        // holding it: the one it was last played in, then the default, then by name, like Steam.
+        var gogCopies: [String: [(bottle: String, game: GOGStore.InstalledGame)]] = [:]
+        for bottle in bottles {
+            for game in gogInstalledByBottle[bottle.name] ?? [] { gogCopies[game.id, default: []].append((bottle.name, game)) }
+        }
+        var gogSeen = Set<String>()
+        let gogKnown = Dictionary(gogGames.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for id in gogGames.map(\.id) + gogCopies.keys.sorted() where !gogSeen.contains(id) {
+            gogSeen.insert(id)
+            let itemID = "gog:\(id)"
+            let copies = gogCopies[id] ?? []
+            let lastPlayedBottle = plays[itemID]?.bottle
+            let primary = copies.min { a, b in
+                if let lp = lastPlayedBottle, (a.bottle == lp) != (b.bottle == lp) { return a.bottle == lp }
+                return before(a.bottle, b.bottle)
+            }
+            let meta = gogKnown[id]
+            items.append(LibraryItem(
+                source: .gog, id: itemID, title: meta?.title ?? primary?.game.title ?? id, bottleName: primary?.bottle,
+                installed: primary != nil, gogID: id, gogSteamAppID: meta?.steamAppID,
+                artworkTall: meta?.artworkTall, artworkWide: meta?.artworkWide,
+                otherBottles: copies.map(\.bottle).filter { $0 != primary?.bottle }.sorted(),
+                lastPlayed: plays[itemID]?.lastPlayedAt))
+        }
+
         // Custom pins (dropped exes, preinstalled games), no artwork. Installed when the program's
         // file is there: one on a drive that is unplugged, or deleted since, is not (highball#269,
         // the Installed filter kept listing them). `pinExists` is the app's check of the disk;
         // without one every pin counts, so the index stays testable without a filesystem.
+        let coveredPins = Set(gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle).map(\.pinItemID))
         for bottle in bottles {
             for pin in bottle.settings.pins where !isLauncherPin(pin) {
                 let id = "pin:\(bottle.name):\(pin.id.uuidString)"
+                if coveredPins.contains(id) { continue }   // its GOG tile stands for it
                 items.append(LibraryItem(
                     source: .pin, id: id, title: pin.name, bottleName: bottle.name,
                     installed: pinExists(bottle, pin), pinID: pin.id,
