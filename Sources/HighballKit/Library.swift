@@ -79,6 +79,13 @@ public enum LibraryIndex {
         }
     }
 
+    /// What the library shows (highball#445): a hidden game stays out of the grid and the Home row,
+    /// and the Hidden filter shows the hidden ones alone, so each can be brought back.
+    public static func visible(_ items: [LibraryItem], hidden: Set<String>, showingHidden: Bool) -> [LibraryItem] {
+        guard !hidden.isEmpty || showingHidden else { return items }
+        return items.filter { LibraryStore.isHidden($0.id, in: hidden) == showingHidden }
+    }
+
     /// Launcher pins are infrastructure, not games — they never appear in the library, and
     /// launching one is not "playing" for the Continue shelf. Single source of truth for the
     /// filter BottleView's Programs section shares.
@@ -264,6 +271,12 @@ public struct LibraryStore: Sendable {
         /// The display one game's window is moved to after it opens, by library id (display UUID
         /// string). Optional so older files still decode.
         var displays: [String: String]?
+        /// Games the player hid from the library, by library id (highball#445: native Mac games,
+        /// demos and finished ones crowded the Windows games). Optional so older files still decode.
+        var hidden: [String]?
+        /// True when Steam for Mac's own installs stay out of the library (highball#445). Absent
+        /// means they are in, as before.
+        var macSteamExcluded: Bool?
     }
 
     public let paths: HighballPaths
@@ -314,6 +327,47 @@ public struct LibraryStore: Sendable {
         if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
     }
 
+    public func hiddenIDs() -> Set<String> { Set(loadShape().hidden ?? []) }
+
+    /// Hides one game from the library, or shows it again. A program's id carries its environment's
+    /// name, so showing it again also drops a mark kept under an earlier name of that environment
+    /// (PinID), or the game would stay hidden after a rename.
+    public func setHidden(_ hidden: Bool, for id: String) {
+        var shape = loadShape()
+        var all = Set(shape.hidden ?? [])
+        if hidden {
+            all.insert(id)
+        } else {
+            all.remove(id)
+            if let uuid = PinID.uuid(in: id) { all = all.filter { !($0.hasPrefix("pin:") && $0.hasSuffix(":" + uuid)) } }
+        }
+        shape.hidden = all.isEmpty ? nil : all.sorted()
+        save(shape)
+    }
+
+    /// Whether an id is hidden in a loaded set: the id itself, or for a program the mark kept under
+    /// an earlier name of its environment (PinID).
+    public static func isHidden(_ id: String, in hidden: Set<String>) -> Bool {
+        if hidden.contains(id) { return true }
+        guard let uuid = PinID.uuid(in: id) else { return false }
+        return hidden.contains { $0.hasPrefix("pin:") && $0.hasSuffix(":" + uuid) }
+    }
+
+    /// Whether the games Steam for Mac installed are part of the library. On unless the player
+    /// turned it off (highball#445).
+    public var includesMacSteam: Bool { loadShape().macSteamExcluded != true }
+
+    public func setIncludesMacSteam(_ on: Bool) {
+        var shape = loadShape()
+        shape.macSteamExcluded = on ? nil : true
+        save(shape)
+    }
+
+    private func save(_ shape: FileShape) {
+        try? paths.ensure()
+        if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
     private func loadShape() -> FileShape {
         guard let data = try? Data(contentsOf: fileURL),
               let shape = try? JSONDecoder.highball.decode(FileShape.self, from: data) else { return FileShape() }
@@ -336,14 +390,17 @@ public struct LibraryStore: Sendable {
         let keptOverrides = (whole.overrides ?? [:]).filter { validIDs.contains($0.key) }
         let keptArgs = (whole.launchArgs ?? [:]).filter { validIDs.contains($0.key) }
         let keptDisplays = (whole.displays ?? [:]).filter { validIDs.contains($0.key) }
+        let keptHidden = (whole.hidden ?? []).filter { validIDs.contains($0) }
         guard keptItems.count != whole.items.count
                 || keptOverrides.count != (whole.overrides ?? [:]).count
                 || keptArgs.count != (whole.launchArgs ?? [:]).count
-                || keptDisplays.count != (whole.displays ?? [:]).count else { return }
+                || keptDisplays.count != (whole.displays ?? [:]).count
+                || keptHidden.count != (whole.hidden ?? []).count else { return }
         whole.items = keptItems
         whole.overrides = keptOverrides.isEmpty ? nil : keptOverrides
         whole.launchArgs = keptArgs.isEmpty ? nil : keptArgs
         whole.displays = keptDisplays.isEmpty ? nil : keptDisplays
+        whole.hidden = keptHidden.isEmpty ? nil : keptHidden
         if let data = try? JSONEncoder.highball.encode(whole) {
             try? data.write(to: fileURL, options: .atomic)
         }
