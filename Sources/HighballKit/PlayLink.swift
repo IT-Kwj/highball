@@ -10,6 +10,8 @@ public enum PlayLink {
         case steam(appid: Int)
         case epic(appName: String)
         case pin(bottle: String, id: UUID)
+        /// A game Battle.net installed, by Blizzard's product code (highball#417, #432).
+        case battlenet(product: String)
         /// A launcher (Steam, Epic, …) by recipe id: `highball://open/launcher/steam`. Opens it,
         /// installing it first if needed (issue #53: Mac icons for launchers too).
         case launcher(id: String)
@@ -21,6 +23,7 @@ public enum PlayLink {
             case let .steam(appid): return "steam:\(appid)"
             case let .epic(name): return "epic:\(name)"
             case let .pin(bottle, id): return "pin:\(bottle):\(id.uuidString)"
+            case let .battlenet(product): return "battlenet:\(product)"
             case let .launcher(id): return "launcher:\(id)"
             }
         }
@@ -44,12 +47,20 @@ public enum PlayLink {
                 let bottle = String(rest[..<last])
                 guard !bottle.isEmpty, let uuid = UUID(uuidString: String(rest[rest.index(after: last)...])) else { return nil }
                 self = .pin(bottle: bottle, id: uuid)
+            case "battlenet":
+                guard Self.isProductCode(rest) else { return nil }
+                self = .battlenet(product: rest)
             case "launcher":
                 guard rest.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return nil }
                 self = .launcher(id: rest)
             default:
                 return nil
             }
+        }
+
+        /// Blizzard's product codes are short words of letters, digits and underscores (wow_classic).
+        static func isProductCode(_ s: String) -> Bool {
+            s.range(of: "^[A-Za-z0-9_]+$", options: .regularExpression) != nil
         }
     }
 
@@ -81,6 +92,9 @@ public enum PlayLink {
         case "pin":
             guard parts.count == 3, !parts[1].isEmpty, let id = UUID(uuidString: parts[2]) else { return nil }
             return Request(target: .pin(bottle: parts[1], id: id), token: token)
+        case "battlenet":
+            guard parts.count == 2, Target.isProductCode(parts[1]) else { return nil }
+            return Request(target: .battlenet(product: parts[1]), token: token)
         default:
             return nil
         }
@@ -93,6 +107,7 @@ public enum PlayLink {
         case let .steam(appid): c.path = "/steam/\(appid)"
         case let .epic(name): c.path = "/epic/\(name)"
         case let .pin(bottle, id): c.path = "/pin/\(bottle)/\(id.uuidString)"
+        case let .battlenet(product): c.path = "/battlenet/\(product)"
         case let .launcher(id): c.host = "open"; c.path = "/launcher/\(id)"
         }
         c.queryItems = [URLQueryItem(name: "t", value: token)]
@@ -103,6 +118,7 @@ public enum PlayLink {
         if let appid = item.steamAppID { return .steam(appid: appid) }
         if let name = item.epicAppName { return .epic(appName: name) }
         if let id = item.pinID, let bottle = item.bottleName { return .pin(bottle: bottle, id: id) }
+        if let product = item.battleNetProduct { return .battlenet(product: product) }
         return nil
     }
 
