@@ -2606,6 +2606,13 @@ final class AppState {
     }
 
     func launch(pin: Pin, in bottle: Bottle) {
+        // A program its GOG tile stands for plays as that game, with comet and cloud saves,
+        // wherever it was started from (the environment's Programs list, a tile from before).
+        if let item = gogItem(standingFor: pin, in: bottle) {
+            appendLog("\(pin.name): playing it as \(item.title) from GOG, for achievements and cloud saves")
+            gogPlay(item, in: bottle, renderer: pin.renderer)
+            return
+        }
         guard let engine = engine(for: bottle) else { return }
         // A pinned program's own mode behind an unaccepted licence gets the same ask as a game's
         // (#61); the runner degrades any other mode the engine lacks, with a note.
@@ -3288,6 +3295,15 @@ final class AppState {
         if !newIDs.isEmpty, !gogFetchInFlight { gogRefresh() }
     }
 
+    /// The GOG tile that stands for a program added by hand (LibraryIndex.gogCoveredPins), if any.
+    /// Read off the environment's saved pins, so a launch-time mode on `pin` does not hide it.
+    private func gogItem(standingFor pin: Pin, in bottle: Bottle) -> LibraryItem? {
+        let id = "pin:\(bottle.name):\(pin.id.uuidString)"
+        guard let covered = LibraryIndex.gogCoveredPins(bottles: [bottle], gogInstalledByBottle: gogInstalledByBottle)
+            .first(where: { $0.pinItemID == id }) else { return nil }
+        return libraryItems.first { $0.id == covered.gogItemID }
+    }
+
     /// A program added by hand that its GOG tile now stands for (LibraryIndex.gogCoveredPins)
     /// hands its settings to that tile once: arguments the GOG task does not already pass, the
     /// display, the graphics mode. Only where the GOG tile has none of its own, and only once per
@@ -3529,6 +3545,7 @@ final class AppState {
             if useComet {
                 stage = L("Starting comet for achievements")
                 comet = await gogStartComet(for: game, in: bottle, engine: engine, log: cometLog)
+                if let comet { watchAchievements(of: game, item: item, bottleName: bottle.name, comet: comet, log: cometLog) }
             }
             if Task.isCancelled {
                 GOGComet(store: store).stop(comet)
@@ -3638,6 +3655,69 @@ final class AppState {
             comet.stop(nil)
             return nil
         }
+    }
+
+    /// A pop-up for each achievement comet unlocks, for as long as that comet runs: its log says
+    /// which, its database says the rest. Ends by itself once comet has stopped, whichever way
+    /// the launch ended.
+    private func watchAchievements(of game: GOGStore.InstalledGame, item: LibraryItem, bottleName: String, comet: Process, log: URL) {
+        let store = gogStore
+        Task.detached { [weak self] in
+            let reader = GOGAchievements.LogReader(log: log)
+            var clientID: String??
+            var shown: Set<String> = []
+            while true {
+                let running = comet.isRunning   // read before the log, so the last lines are never missed
+                let unlocks = reader.newUnlocks().filter { shown.insert($0.key).inserted }
+                if !unlocks.isEmpty {
+                    if clientID == nil { clientID = GOGSaves(store: store).clientID(for: game) }
+                    let database = clientID.flatMap { $0 }.flatMap { GOGComet(store: store).achievementDatabase(clientID: $0) }
+                    for unlock in unlocks {
+                        let achievement = GOGAchievements.details(key: unlock.key, name: unlock.name, database: database)
+                        await self?.achievementUnlocked(achievement, item: item, bottleName: bottleName)
+                    }
+                }
+                if !running { return }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func achievementUnlocked(_ achievement: GOGAchievement, item: LibraryItem, bottleName: String) {
+        appendLog("\(item.title): achievement unlocked, “\(achievement.name)”")
+        guard AchievementToast.isEnabled else { return }
+        // The game's window, so the card lands on it: windowed, full screen or borderless.
+        let session = runningSessions.first { $0.libraryID == item.id && $0.bottleName == bottleName }
+        let prefix = bottles.first { $0.name == bottleName }?.url
+        Task {
+            var window: CGRect?
+            if let session, let prefix {
+                window = await Task.detached { Self.largestWindow(of: SessionWatch.pids(ofPrefix: prefix, markers: session.markers)) }.value
+            }
+            AchievementToast.shared.show(achievement, gameWindow: window)
+        }
+    }
+
+    /// The biggest ordinary window on screen among these processes, in CGWindowList's coordinates.
+    nonisolated private static func largestWindow(of pids: [pid_t]) -> CGRect? {
+        guard !pids.isEmpty,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let wanted = Set(pids)
+        return windows.compactMap { info -> CGRect? in
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, wanted.contains(pid),
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: bounds)
+        }.max { $0.width * $0.height < $1.width * $1.height }
+    }
+
+    /// Settings' Preview: the pop-up as a game would show it.
+    func previewAchievementPopup() {
+        var sample = GOGAchievement(key: "HIGHBALL_PREVIEW", name: L("First Steps"))
+        sample.description = L("This is how an achievement shows up while you play.")
+        sample.rarity = 31
+        sample.rarityLevel = "Common"
+        AchievementToast.shared.show(sample)
     }
 
     /// The game's cloud-save folders in this environment, empty when it has none or GOG cannot say.

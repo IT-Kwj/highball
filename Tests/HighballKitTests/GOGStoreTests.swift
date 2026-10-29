@@ -377,4 +377,60 @@ final class GOGStoreTests: XCTestCase {
         let notHere = LibraryItem(source: .gog, id: "gog:7", title: "X", bottleName: nil, installed: false, gogID: "7")
         XCTAssertFalse(Uninstall.isActionable(Uninstall.route(for: notHere)))
     }
+
+    /// comet's unlock lines, as v0.4.0 writes them; a name may hold a comma.
+    func testAchievementUnlocksAreReadOffCometsLog() {
+        let log = """
+        [2026-10-28T14:15:48Z INFO  comet::api::handlers] Uploading new achievements
+        [2026-10-28T14:32:50Z INFO  comet::api::handlers::utils] Unlocking achievement HILT_ACHIEVEMENT, Choose to be Chosen
+        [2026-10-28T14:40:01Z INFO  comet::api::handlers::utils] Unlocking achievement A_2, Well, That Happened
+        """
+        let unlocks = GOGAchievements.unlocks(in: log)
+        XCTAssertEqual(unlocks.map(\.key), ["HILT_ACHIEVEMENT", "A_2"])
+        XCTAssertEqual(unlocks.map(\.name), ["Choose to be Chosen", "Well, That Happened"])
+    }
+
+    /// Each read returns only what is new, and a line still being written waits for the next read.
+    func testAchievementLogReaderTakesWholeNewLinesOnce() throws {
+        let log = FileManager.default.temporaryDirectory.appending(path: "comet-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: log) }
+        try "x Unlocking achievement ONE, First\nx Unlocking achievement TWO, Sec".write(to: log, atomically: true, encoding: .utf8)
+        let reader = GOGAchievements.LogReader(log: log)
+        XCTAssertEqual(reader.newUnlocks().map(\.key), ["ONE"])
+        XCTAssertTrue(reader.newUnlocks().isEmpty)
+        let handle = try FileHandle(forWritingTo: log)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("ond\n".utf8))
+        try handle.close()
+        XCTAssertEqual(reader.newUnlocks().map(\.name), ["Second"])
+    }
+
+    /// The pop-up's details come from comet's database, found by client id; a key it lacks keeps
+    /// the logged name.
+    func testAchievementDetailsComeFromCometsDatabase() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "comet-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let dir = home.appending(path: "Library/Application Support/comet/gameplay/5353/1001")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appending(path: "gameplay.db")
+        let sql = """
+        CREATE TABLE achievement (id INTEGER PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
+          visible_while_locked INTEGER NOT NULL, unlock_time TEXT, image_url_locked TEXT NOT NULL, image_url_unlocked TEXT NOT NULL,
+          changed INTEGER NOT NULL, rarity REAL NOT NULL DEFAULT 0.0, rarity_level_description TEXT NOT NULL DEFAULT "",
+          rarity_level_slug TEXT NOT NULL DEFAULT "");
+        INSERT INTO achievement VALUES (1, 'HARTFELT', 'The Third Thing', 'Defeat Hartman', 0, NULL,
+          'https://images.gog.com/a_gac_60.jpg', 'https://images.gog.com/b_gac_60.jpg', 0, 12.1, 'Uncommon', 'uncommon');
+        """
+        _ = try Shell.capture("/usr/bin/sqlite3", [file.path, sql])
+        let db = GOGAchievements.database(home: home, clientID: "5353")
+        XCTAssertEqual(db?.lastPathComponent, "gameplay.db")
+        XCTAssertNil(GOGAchievements.database(home: home, clientID: "9999"))
+        let found = GOGAchievements.details(key: "HARTFELT", name: "logged", database: db)
+        XCTAssertEqual(found.name, "The Third Thing")
+        XCTAssertEqual(found.description, "Defeat Hartman")
+        XCTAssertEqual(found.imageURL?.absoluteString, "https://images.gog.com/b_gac_60.jpg")
+        XCTAssertEqual(found.rarity, 12.1, accuracy: 0.001)
+        XCTAssertEqual(found.rarityLevel, "Uncommon")
+        XCTAssertEqual(GOGAchievements.details(key: "OTHER", name: "logged", database: db), GOGAchievement(key: "OTHER", name: "logged"))
+    }
 }

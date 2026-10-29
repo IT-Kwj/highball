@@ -72,6 +72,9 @@ public struct GOGComet: Sendable {
         try? FileManager.default.removeItem(at: authCopy)
     }
 
+    /// comet's database of a game's achievements, for the unlock pop-up (GOGAchievements).
+    public func achievementDatabase(clientID: String) -> URL? { GOGAchievements.database(home: home, clientID: clientID) }
+
     /// Whether comet came up and is listening, read from its log ("Listening on port 9977").
     public static func isListening(log: URL) -> Bool {
         ((try? String(contentsOf: log, encoding: .utf8)) ?? "").contains("Listening on port")
