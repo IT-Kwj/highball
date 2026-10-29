@@ -7,7 +7,7 @@ struct Highball: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "highball",
         abstract: "Highball — run Windows games on Apple Silicon. Free, open, engine-agnostic.",
-        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, LibraryCommand.self, Play.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, Report.self, BugReportCommand.self, Verify.self],
+        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, LibraryCommand.self, Play.self, QuitCommand.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, Report.self, BugReportCommand.self, Verify.self],
         defaultSubcommand: nil
     )
 }
@@ -761,6 +761,34 @@ func currentLibrary(paths: HighballPaths, epic: Bool) -> [LibraryItem] {
                               battleNetByBottle: battleNet,
                               plays: LibraryStore(paths: paths).load(), defaultBottle: home?.name,
                               pinExists: { b, pin in FileManager.default.fileExists(atPath: pin.executableURL(driveC: b.driveC).path) })
+}
+
+/// Everything Highball started, ended in one go: what a frontend runs when it closes (highball#432),
+/// since it knows games by id and has no idea which environment holds which. Every environment
+/// with a live Wine server is stopped the way Stop all processes does it, then the app is asked
+/// to quit, as Quit in its menu would. Nothing outside Highball's environments is touched.
+struct QuitCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "quit",
+        abstract: "Stop every program running in Highball's environments, Steam included, and quit Highball.",
+        discussion: "For frontends such as ES-DE on exit. --keep-app leaves the Highball app open.")
+    @Flag(help: "Stop the environments but leave the Highball app running.") var keepApp = false
+
+    func run() async throws {
+        let paths = HighballPaths()
+        let engines = EngineStore(paths: paths)
+        for b in (try? BottleStore(paths: paths).list()) ?? [] where ProcessTable.liveServer(forPrefix: b.url) != nil {
+            guard let eng = try? engines.engine(b.settings.engineID) else { continue }
+            _ = try? WineRunner(paths: paths, engine: eng, bottle: b).kill()
+            print("stopped \(b.name)")
+        }
+        guard !keepApp else { return }
+        let quit = Process()
+        quit.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        quit.arguments = ["-e", "if application id \"app.highball.Highball\" is running then tell application id \"app.highball.Highball\" to quit"]
+        try? quit.run()
+        quit.waitUntilExit()
+    }
 }
 
 struct LibraryCommand: AsyncParsableCommand {
