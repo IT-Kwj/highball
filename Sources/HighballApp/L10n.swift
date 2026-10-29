@@ -421,6 +421,8 @@ enum L10n {
         "Install Steam in this bottle to start playing your Windows library.": "Installez Steam dans cette bouteille pour jouer à votre bibliothèque Windows.",
         "Show Steam": "Afficher Steam",
         "Open Steam": "Ouvrir Steam",
+        "Steam in another environment": "Steam dans un autre environnement",
+        "%@ in '%@'. The arrow opens Steam in another environment.": "%@ dans « %@ ». La flèche ouvre Steam dans un autre environnement.",
         "Install Steam": "Installer Steam",
         "Delete this bottle? Its Windows drive and everything installed in it are removed.": "Supprimer cette bouteille ? Son disque Windows et tout ce qui y est installé seront effacés.",
 
@@ -574,6 +576,7 @@ enum L10n {
         "Use '%@'": "Utiliser « %@ »",
         "'%@' is already on the %@ engine and has the game installed, so it plays there. This environment stays as it is.": "« %@ » utilise déjà le moteur %@ et le jeu y est installé, il s'y lance donc. Cet environnement reste tel quel.",
         "'%@' is already on the %@ engine. Using it installs the game there, with what it needs, and this environment stays as it is.": "« %@ » utilise déjà le moteur %@. L'utiliser y installe le jeu, avec ce qu'il lui faut, et cet environnement reste tel quel.",
+        "'%@' is already on the %@ engine. Using it brings the game installed here along, without a new download or extra disk space, adds what it needs, and this environment stays as it is.": "« %@ » utilise déjà le moteur %@. Le choisir y emmène le jeu installé ici, sans nouveau téléchargement ni espace disque en plus, ajoute ce qu'il lui faut, et cet environnement reste tel quel.",
         "Add": "Ajouter",
         "Automatic": "Automatique",
         "Creating the %@ environment — first boot takes about 90 seconds": "Création de l'environnement %@ — le premier démarrage prend environ 90 secondes",

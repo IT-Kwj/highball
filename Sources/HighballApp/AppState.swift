@@ -1497,6 +1497,14 @@ final class AppState {
         return bottle
     }
 
+    /// The other environments with a Steam of their own, by name. The toolbar's Open Steam only
+    /// ever opened the default environment's, so a game living in another one could not reach its
+    /// Steam from there (highball#537); these are offered beside it.
+    var otherSteamBottles: [Bottle] {
+        bottles.filter { $0.name != defaultBottle?.name && !deletingBottles.contains($0.name) && steamInstalled(in: $0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func steamLauncherTitle(in bottle: Bottle) -> String {
         steamClients.contains(bottle.name) ? L("Show Steam") : L("Open Steam")
     }
@@ -1747,9 +1755,21 @@ final class AppState {
     func useEnvironment(_ env: Bottle, for recipe: HighballKit.Recipe, item: LibraryItem) {
         pendingEngine = nil
         let target = item.homed(in: env.name)
+        // The chosen environment becomes the game's home. The library put the game wherever it was
+        // last played, so the next Play went back to the environment on the wrong engine and the
+        // same ask came up every time (highball#537).
+        let lastPlayed = libraryPlays[item.id]?.lastPlayedAt ?? Date()
+        libraryStore.recordPlay(id: item.id, bottle: env.name, date: lastPlayed)
+        libraryPlays[item.id] = LibraryStore.PlayRecord(lastPlayedAt: lastPlayed, bottle: env.name)
+        // A Steam game installed where Play started comes along as a clone, as it does into a new
+        // environment, instead of being handed to that environment's Steam to download again.
+        let source = bottles.first { $0.name == item.bottleName && $0.name != env.name }
+        let carries = !target.installed && (source.map { canCarryGame(item, from: $0) } ?? false)
         let next: () -> Void = { [weak self] in
             guard let self else { return }
-            if target.installed { self.play(target) } else { self.installSteamGame(target) }
+            if target.installed { self.play(target) }
+            else if carries, let source { self.carryAndPlay(item, from: source, into: env) }
+            else { self.installSteamGame(target) }
         }
         if !env.settings.recipes.contains(recipe.id) || !recipe.artifactsPresent(driveC: env.driveC, steamGames: gamesByBottle[env.name] ?? []) {
             applyRecipe(recipe.id, to: env, then: DoneState(
@@ -1758,6 +1778,32 @@ final class AppState {
                 cta: next))
         } else {
             next()
+        }
+    }
+
+    /// Clones a Steam game from `source` into `env`'s Steam library and plays it there; hands it to
+    /// that Steam to install when the clone is refused. Steam in `env` is stopped first, since a
+    /// running client reads the new record only when it starts again.
+    private func carryAndPlay(_ item: LibraryItem, from source: Bottle, into env: Bottle) {
+        guard let appid = item.steamAppID, let engine = engine(for: env),
+              let game = (gamesByBottle[source.name] ?? []).first(where: { $0.appid == appid }),
+              let steam = SteamLibrary.steamRoot(of: env) else { installSteamGame(item.homed(in: env.name)); return }
+        let paths = paths
+        Task { [weak self] in
+            try? await WineRunner(paths: paths, engine: engine, bottle: env).stopSteam()
+            let outcome = SteamGameCarryOver.carry(game, into: steam.appending(path: "steamapps", directoryHint: .isDirectory))
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .carried:
+                    self.appendLog("\(item.title): carried over from '\(source.name)' to '\(env.name)' as a clone, no download and no extra disk space")
+                    self.refresh()
+                    self.play((self.libraryItems.first { $0.id == item.id } ?? item).homed(in: env.name))
+                case .skipped(let why):
+                    self.appendLog("\(item.title): not carried over from '\(source.name)': \(why); the Steam in '\(env.name)' installs it")
+                    self.installSteamGame(item.homed(in: env.name))
+                }
+            }
         }
     }
 
