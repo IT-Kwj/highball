@@ -108,7 +108,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let delegate = UpdaterDelegate()
         updaterDelegate = delegate
-        updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: nil)
+        #if DEBUG
+        // A dev build is 0.0.0-dev, so any check would offer to replace it with the latest release.
+        let startUpdater = false
+        #else
+        let startUpdater = true
+        #endif
+        updaterController = SPUStandardUpdaterController(startingUpdater: startUpdater, updaterDelegate: delegate, userDriverDelegate: nil)
         super.init()
     }
     /// Set from the App's onAppear so quit-time can reach the bottles.
