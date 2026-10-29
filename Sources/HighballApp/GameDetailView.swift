@@ -526,7 +526,7 @@ struct GameDetailView: View {
                                             state.engineTransition = AppState.EngineTransition(bottleName: bottle.name, targetID: newID)
                                         })) {
                                         ForEach(offered, id: \.id) { e in
-                                            Text(verbatim: e.missing ? "\(e.id) (\(L("missing")))" : e.installed ? e.id : "\(e.id) (\(L("download")))").tag(e.id)
+                                            Text(verbatim: e.missing ? "\(e.label) (\(L("missing")))" : e.installed ? e.label : "\(e.label) (\(L("download")))").tag(e.id)
                                         }
                                     }.labelsHidden().frame(maxWidth: 360).disabled(state.busy)
                                 } else {

@@ -1086,6 +1086,9 @@ extension RegressionTests {
         XCTAssertEqual(withMissing.map(\.id), ["x64-a-r1", "x64-gone-r0"], "a bottle on an engine that is gone still sees its own row")
         XCTAssertEqual(withMissing.last?.missing, true)
         XCTAssertEqual(EngineStore.offeredEngines(installed: [r1], known: [], current: r1.id).count, 1, "current engine present: no extra row")
+        // Rows carry the display name, so a picker can say which revision has what (highball#546).
+        XCTAssertEqual(offered.map(\.label), ["e x64-a-r1 · x64-a-r1", "e x64-a-r0 · x64-a-r0", "e x64-a-r10 · x64-a-r10", "e x64-a-r2 · x64-a-r2"])
+        XCTAssertEqual(withMissing.last?.label, "x64-gone-r0", "a missing engine has no manifest, so its row is the id")
     }
 
     func testEnginesAboveTheMacOSFloorAreNotOffered() throws {
