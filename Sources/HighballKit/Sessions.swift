@@ -114,3 +114,73 @@ public enum SessionWatch {
         else { try? data.write(to: file) }
     }
 }
+
+/// The games the app sees running, by library id, kept in a small file in the home for the command
+/// line: `highball play --wait` returns once its game has quit, so a frontend that starts games
+/// (ES-DE, highball#432) gets control back then, and Highball and Steam stay as they are. The app
+/// rewrites the file at every change; its process id and executable make a file left behind by an
+/// app that is gone read as nothing known, never as a game still running.
+public struct RunningGames: Codable, Sendable, Equatable {
+    public var pid: Int32
+    public var executable: String
+    public var games: [String]
+
+    public init(pid: Int32, executable: String, games: [String]) {
+        self.pid = pid; self.executable = executable; self.games = games
+    }
+
+    public static func file(in paths: HighballPaths) -> URL { paths.home.appending(path: "running.json") }
+
+    /// What the running app writes: its own process and the library ids of its sessions.
+    public static func write(_ games: [String], paths: HighballPaths) {
+        let me = RunningGames(pid: getpid(), executable: Bundle.main.executableURL?.resolvingSymlinksInPath().path ?? "", games: games)
+        try? paths.ensure()
+        if let data = try? JSONEncoder().encode(me) { try? data.write(to: file(in: paths), options: .atomic) }
+    }
+
+    public static func read(paths: HighballPaths) -> RunningGames? {
+        guard let data = try? Data(contentsOf: file(in: paths)) else { return nil }
+        return try? JSONDecoder().decode(RunningGames.self, from: data)
+    }
+
+    /// The library ids running now, or nil when no app that wrote the file is running.
+    public static func current(paths: HighballPaths, isLive: (RunningGames) -> Bool = RunningGames.isLive) -> Set<String>? {
+        guard let state = read(paths: paths), isLive(state) else { return nil }
+        return Set(state.games)
+    }
+
+    /// The writer still runs: its process exists and is the same program, so a process id reused
+    /// after a crash does not count.
+    public static func isLive(_ state: RunningGames) -> Bool {
+        guard state.pid > 0, kill(state.pid, 0) == 0 else { return false }
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(state.pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        let path = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+        return state.executable.isEmpty || path == state.executable
+    }
+}
+
+/// How `highball play --wait` follows its game, one look at a time: first until the app lists the
+/// game as running, then until it no longer does or the app has quit. A game that never starts (a
+/// question in the app left unanswered, a launch that failed) stops the wait after `startTimeout`.
+public enum PlayWait {
+    public enum Phase: Equatable, Sendable { case starting, running }
+    public enum Step: Equatable, Sendable {
+        case keepWaiting(Phase)
+        case ended
+        case neverStarted
+    }
+
+    /// `running` is what RunningGames.current read: nil when no Highball app runs.
+    public static func step(_ phase: Phase, id: String, running: Set<String>?, waited: TimeInterval,
+                            startTimeout: TimeInterval) -> Step {
+        let listed = running?.contains(id) == true
+        switch phase {
+        case .starting:
+            if listed { return .keepWaiting(.running) }
+            return waited >= startTimeout ? .neverStarted : .keepWaiting(.starting)
+        case .running:
+            return listed ? .keepWaiting(.running) : .ended
+        }
+    }
+}

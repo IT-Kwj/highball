@@ -24,6 +24,33 @@ public enum PlayLink {
             case let .launcher(id): return "launcher:\(id)"
             }
         }
+
+        /// The target a library id names, the inverse of `libraryID`: what `highball play` takes
+        /// (highball#432), so a frontend starts a game by the same id `highball library` lists and
+        /// library.json keys everything by. An environment's name may hold a colon, so a program's
+        /// id splits at its last one. Anything else is nil.
+        public init?(libraryID id: String) {
+            guard let colon = id.firstIndex(of: ":") else { return nil }
+            let rest = String(id[id.index(after: colon)...])
+            guard !rest.isEmpty else { return nil }
+            switch id[..<colon] {
+            case "steam":
+                guard let appid = Int(rest), appid > 0 else { return nil }
+                self = .steam(appid: appid)
+            case "epic":
+                self = .epic(appName: rest)
+            case "pin":
+                guard let last = rest.lastIndex(of: ":") else { return nil }
+                let bottle = String(rest[..<last])
+                guard !bottle.isEmpty, let uuid = UUID(uuidString: String(rest[rest.index(after: last)...])) else { return nil }
+                self = .pin(bottle: bottle, id: uuid)
+            case "launcher":
+                guard rest.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil else { return nil }
+                self = .launcher(id: rest)
+            default:
+                return nil
+            }
+        }
     }
 
     public struct Request: Equatable, Sendable {

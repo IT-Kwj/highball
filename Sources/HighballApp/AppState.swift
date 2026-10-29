@@ -2446,8 +2446,14 @@ final class AppState {
     // MARK: Sessions (UX plan 0.6)
 
     /// Games running right now, from their processes. The library shows them and offers Stop;
-    /// nothing here blocks the app while a game runs.
-    var runningSessions: [GameSession] = []
+    /// nothing here blocks the app while a game runs. Kept in the home as well (RunningGames), so
+    /// `highball play --wait` returns when its game quits (highball#432).
+    var runningSessions: [GameSession] = [] {
+        didSet {
+            let ids = runningSessions.compactMap(\.libraryID)
+            if ids != oldValue.compactMap(\.libraryID) { RunningGames.write(ids, paths: paths) }
+        }
+    }
     /// The last session that ended, for the post-play prompt to come.
     var lastEndedSession: SessionRecord?
     /// A finished session worth asking about: at least a minute of play (a shorter one is a
