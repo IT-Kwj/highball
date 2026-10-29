@@ -16,7 +16,7 @@ on:
         default: "v1.4.2"
       patches:
         description: "MVK_PATCHES, in the order they apply"
-        default: "shadow-import linear-fallback shadow-readback device-memory-cap"
+        default: "shadow-import linear-fallback shadow-readback device-memory-cap cache-drawid-present lenient-interfaces"
       publish:
         description: "Upload the archive to the engine-components release"
         type: boolean
@@ -39,7 +39,7 @@ jobs:
           xcodebuild -version
       - name: build
         env:
-          MVK_PATCHES: ${{ inputs.patches || 'shadow-import linear-fallback shadow-readback device-memory-cap' }}
+          MVK_PATCHES: ${{ inputs.patches || 'shadow-import linear-fallback shadow-readback device-memory-cap cache-drawid-present lenient-interfaces' }}
         run: Scripts/build-moltenvk.sh "${{ inputs.tag || 'v1.4.2' }}" "$RUNNER_TEMP/out"
       - name: sdk and markers
         run: |
