@@ -359,6 +359,8 @@ enum L10n {
         "Running": "En cours",
         "Stop": "Arrêter",
         "a cold Steam client can take a couple of minutes": "un client Steam à froid peut prendre quelques minutes",
+        "a cold Battle.net can take a couple of minutes": "un Battle.net à froid peut prendre quelques minutes",
+        "Battle.net opens, then press Play there": "Battle.net s'ouvre, appuyez ensuite sur Jouer",
         "Try again": "Réessayer",
         "Download again": "Retélécharger",
         "Repair": "Réparer",

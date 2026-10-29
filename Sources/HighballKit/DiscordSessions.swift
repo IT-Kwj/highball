@@ -15,7 +15,7 @@ public enum DiscordSessions {
     public static func environment(for session: GameSession, prefix: URL, processList: String) -> [String: String]? {
         let root = prefix.resolvingSymlinksInPath().path
         for line in processList.split(whereSeparator: \.isNewline) {
-            guard session.markers.contains(where: { line.contains($0) }),
+            guard session.markers.contains(where: { line.contains($0) }), !session.excluding.contains(where: { line.contains($0) }),
                   let first = line.split(whereSeparator: \.isWhitespace).first,
                   let pid = Int32(first),
                   let command = ProcessTable.commandLineAndEnvironment(of: pid),

@@ -122,6 +122,10 @@ struct LibraryView: View {
             FilterChip(label: L("All"), on: sourceFilter == nil) { sourceFilter = nil }
             FilterChip(label: "Steam", on: sourceFilter == .steam) { sourceFilter = .steam }
             FilterChip(label: "Epic", on: sourceFilter == .epic) { sourceFilter = .epic }
+            // Only once Battle.net has installed something: most libraries never have a game from it.
+            if sourceFilter == .battlenet || state.libraryItems.contains(where: { $0.source == .battlenet }) {
+                FilterChip(label: "Battle.net", on: sourceFilter == .battlenet) { sourceFilter = .battlenet }
+            }
             FilterChip(label: L("Programs"), on: sourceFilter == .pin) { sourceFilter = .pin }
             Divider().frame(height: 16)
             FilterChip(label: L("Installed"), on: installedOnly) { installedOnly.toggle() }
@@ -426,7 +430,7 @@ struct SourceBadge: View {
     /// whole badge lit when Steam for Mac has it installed.
     var mac: MacSteamBuild? = nil
     private var label: String {
-        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .pin: "EXE" }
+        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .pin: "EXE"; case .battlenet: "BATTLE.NET" }
     }
     private var lit: Bool { mac == .installed }
     var body: some View {
