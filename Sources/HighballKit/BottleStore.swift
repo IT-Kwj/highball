@@ -90,6 +90,9 @@ public struct BottleStore: Sendable {
     public func create(name rawName: String, engine: InstalledEngine, renderer: Renderer? = nil, windowsVersion: WindowsVersion = .win10) async throws -> Bottle {
         let name = rawName.trimmingCharacters(in: .whitespaces)
         if let problem = Self.nameProblem(name) { throw HighballError.invalid(problem) }
+        // Wine reaches the engine and the environment through Windows paths, so a folder name
+        // Windows can't hold anywhere above them fails the first boot every time (highball#547).
+        if let problem = HighballPaths.windowsPathProblem(paths.home) { throw HighballError.invalid(problem) }
         try paths.ensure()
         let url = try Self.bottleURL(name, in: paths)
         // lstat, not fileExists: fileExists follows symlinks, so a dangling one sailed through

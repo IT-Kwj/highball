@@ -43,6 +43,34 @@ final class HomeLocationTests: XCTestCase {
         XCTAssertNil(HighballPaths.locationWarning(good), "a local folder is not a share warning")
     }
 
+    // Windows drops a trailing period or space from folder names, and Wine with it: a home folder
+    // named "a." became Z:\\Users\\a and the first setup failed with kernel32.dll on every try
+    // (highball#547). Such a path is refused before anything boots, and as a chosen location.
+    func testWindowsPathProblem() throws {
+        XCTAssertNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a/Library/Application Support/Highball")))
+        XCTAssertNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a.b/.hidden/Highball")), "a period inside or in front is fine")
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a./Library/Application Support/Highball")))
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Volumes/Games /Highball")), "a trailing space is dropped too")
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/tmp/Hi?ball")))
+        let dotted = tmp.appending(path: "x.", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dotted, withIntermediateDirectories: true)
+        XCTAssertNotNil(HighballPaths.locationProblem(dotted, defaultHome: tmp.appending(path: "default")))
+    }
+
+    func testCreateRefusesAHomeWindowsCannotReach() async throws {
+        let paths = HighballPaths(home: tmp.appending(path: "u./Highball", directoryHint: .isDirectory))
+        let json = #"{"id":"x64-a-r1","displayName":"e","arch":"x86_64","minMacOS":"14.0","components":{}}"#
+        let engine = InstalledEngine(manifest: try JSONDecoder().decode(EngineManifest.self, from: Data(json.utf8)),
+                                     root: tmp.appending(path: "engine"))
+        do {
+            _ = try await BottleStore(paths: paths).create(name: "Games", engine: engine)
+            XCTFail("create must refuse before booting anything")
+        } catch let HighballError.invalid(why) {
+            XCTAssertTrue(why.contains("u."), why)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.bottle("Games").path), "nothing is made")
+    }
+
     // The volume check asks the volume instead of trusting a name. The old check read
     // volumeSupportsSymbolicLinks and refused exFAT by name, but macOS reports exFAT as supporting
     // symbolic links and creates them, so it never fired and the promised refusal never happened
