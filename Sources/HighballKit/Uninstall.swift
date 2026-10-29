@@ -40,6 +40,10 @@ public enum Uninstall {
             return .epic(appName: name)
         case .pin:
             return .windowsUninstaller
+        case .battlenet:
+            // Battle.net registers each game with Windows' Add or Remove Programs, pointing at its
+            // own uninstaller, which also updates the client's records.
+            return .windowsUninstaller
         }
     }
 

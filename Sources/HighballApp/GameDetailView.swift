@@ -135,7 +135,8 @@ struct GameDetailView: View {
 
     private var libraryInfo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            row(L("Source"), item.source == .steam ? "Steam" : item.source == .epic ? "Epic Games" : L("Windows program"))
+            row(L("Source"), item.source == .steam ? "Steam" : item.source == .epic ? "Epic Games"
+                : item.source == .battlenet ? "Battle.net" : L("Windows program"))
             if item.sizeOnDisk > 0 {
                 row(L("Size on disk"), ByteCountFormatter.string(fromByteCount: item.sizeOnDisk, countStyle: .file))
             }

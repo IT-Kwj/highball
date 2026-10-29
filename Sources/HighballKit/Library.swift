@@ -7,7 +7,7 @@ import ImageIO
 // section; the bottle is a per-game property, never the navigation.
 
 public enum LibrarySource: String, Sendable, Codable {
-    case steam, epic, pin
+    case steam, epic, pin, battlenet
 }
 
 /// A playable item in the unified library. Pure value: no Bottle, no GameDBEntry — the app
@@ -16,7 +16,7 @@ public enum LibrarySource: String, Sendable, Codable {
 public struct LibraryItem: Identifiable, Sendable, Hashable {
     public let source: LibrarySource
     /// Stable identity, also the persistence key in library.json — never change its shape:
-    /// "steam:<appid>" | "epic:<app_name>" | "pin:<bottle>:<uuid>".
+    /// "steam:<appid>" | "epic:<app_name>" | "pin:<bottle>:<uuid>" | "battlenet:<product code>".
     public let id: String
     public let title: String
     /// Where it lives. nil only for an Epic title owned but not installed in any bottle.
@@ -26,6 +26,8 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
     public let installedOnMac: Bool
     public let steamAppID: Int?
     public let epicAppName: String?
+    /// Blizzard's product code for a game Battle.net installed (BattleNetGame.productCode).
+    public let battleNetProduct: String?
     public let pinID: UUID?
     public let artworkTall: URL?
     public let artworkWide: URL?
@@ -36,11 +38,11 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
 
     public init(source: LibrarySource, id: String, title: String, bottleName: String?,
                 installed: Bool, installedOnMac: Bool = false, steamAppID: Int? = nil, epicAppName: String? = nil,
-                pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
+                battleNetProduct: String? = nil, pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
                 otherBottles: [String] = [], sizeOnDisk: Int64 = 0, lastPlayed: Date? = nil) {
         self.source = source; self.id = id; self.title = title; self.bottleName = bottleName
         self.installed = installed; self.installedOnMac = installedOnMac
-        self.steamAppID = steamAppID; self.epicAppName = epicAppName
+        self.steamAppID = steamAppID; self.epicAppName = epicAppName; self.battleNetProduct = battleNetProduct
         self.pinID = pinID; self.artworkTall = artworkTall; self.artworkWide = artworkWide
         self.otherBottles = otherBottles; self.sizeOnDisk = sizeOnDisk; self.lastPlayed = lastPlayed
     }
@@ -58,7 +60,7 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
         let others = (otherBottles.filter { $0 != bottle } + (installed ? [bottleName].compactMap { $0 } : [])).sorted()
         return LibraryItem(source: source, id: id, title: title, bottleName: bottle, installed: holds,
                            installedOnMac: installedOnMac, steamAppID: steamAppID, epicAppName: epicAppName,
-                           pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
+                           battleNetProduct: battleNetProduct, pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
                            otherBottles: others, sizeOnDisk: holds ? 0 : sizeOnDisk, lastPlayed: lastPlayed)
     }
 }
@@ -101,13 +103,15 @@ public enum LibraryIndex {
     /// `steamOwnedByBottle` adds the account's games that aren't installed anywhere
     /// (SteamOwnedLibrary, highball#199), homed in the first bottle whose Steam owns them.
     /// `macInstalled` is what Steam for Mac has installed (MacSteam): those games count as
-    /// installed, and one no bottle knows gets a tile of its own.
+    /// installed, and one no bottle knows gets a tile of its own. `battleNetByBottle` is what
+    /// Battle.net installed in each bottle (BattleNetLibrary, highball#417).
     public static func build(bottles: [Bottle],
                              steamByBottle: [String: [SteamGame]],
                              steamOwnedByBottle: [String: [OwnedSteamGame]] = [:],
                              macInstalled: [SteamGame] = [],
                              epicOwned: [EpicStore.Game],
                              epicInstalls: [String: String],
+                             battleNetByBottle: [String: [BattleNetGame]] = [:],
                              plays: [String: LibraryStore.PlayRecord] = [:],
                              defaultBottle: String? = nil,
                              pinExists: (Bottle, Pin) -> Bool = { _, _ in true }) -> [LibraryItem] {
@@ -189,6 +193,27 @@ public enum LibraryIndex {
                 installed: home != nil, epicAppName: game.app_name,
                 artworkTall: game.artworkTall, artworkWide: game.artworkWide,
                 lastPlayed: plays[id]?.lastPlayedAt))
+        }
+
+        // Battle.net: one tile per game like Steam's, homed where it was last played, then in the
+        // default environment, then by name; the other environments holding it are remembered.
+        var byProduct: [String: [(bottle: String, game: BattleNetGame)]] = [:]
+        for bottle in bottles {
+            for game in battleNetByBottle[bottle.name] ?? [] { byProduct[game.productCode, default: []].append((bottle.name, game)) }
+        }
+        for (code, copies) in byProduct {
+            let id = "battlenet:\(code)"
+            let lastPlayedBottle = plays[id]?.bottle
+            let primary = copies.min { a, b in
+                if let lp = lastPlayedBottle, (a.bottle == lp) != (b.bottle == lp) { return a.bottle == lp }
+                return before(a.bottle, b.bottle)
+            }!
+            items.append(LibraryItem(
+                source: .battlenet, id: id, title: primary.game.title, bottleName: primary.bottle,
+                installed: true, battleNetProduct: code, artworkTall: primary.game.boxArt,
+                otherBottles: copies.map(\.bottle).filter { $0 != primary.bottle }.sorted(),
+                sizeOnDisk: primary.game.sizeOnDisk,
+                lastPlayed: [primary.game.lastPlayed, plays[id]?.lastPlayedAt].compactMap { $0 }.max()))
         }
 
         // Custom pins (dropped exes, preinstalled games), no artwork. Installed when the program's

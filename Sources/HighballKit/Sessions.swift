@@ -10,6 +10,9 @@ public struct GameSession: Identifiable, Sendable, Equatable {
     public let appid: Int?
     /// Substrings of the game's command line, in both path styles Wine reports.
     public let markers: [String]
+    /// Substrings of processes that carry a marker without being the game: a Battle.net game's
+    /// launcher sits in the game's folder and exits once Battle.net has the request.
+    public let excluding: [String]
     public let started: Date
     /// The renderer the launch used, for the post-play report.
     public let renderer: String?
@@ -17,9 +20,11 @@ public struct GameSession: Identifiable, Sendable, Equatable {
     public let startNotice: String?
     public let startNoticeMinutes: Int
     public let libraryID: String?
-    public init(id: UUID = UUID(), title: String, bottleName: String, appid: Int?, markers: [String], started: Date = Date(), renderer: String? = nil,
+    public init(id: UUID = UUID(), title: String, bottleName: String, appid: Int?, markers: [String], excluding: [String] = [],
+                started: Date = Date(), renderer: String? = nil,
                 libraryID: String? = nil, startNotice: String? = nil, startNoticeMinutes: Int? = nil) {
-        self.id = id; self.title = title; self.bottleName = bottleName; self.appid = appid; self.markers = markers; self.started = started
+        self.id = id; self.title = title; self.bottleName = bottleName; self.appid = appid; self.markers = markers
+        self.excluding = excluding; self.started = started
         self.renderer = renderer; self.libraryID = libraryID
         self.startNotice = startNotice.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         self.startNoticeMinutes = startNoticeMinutes ?? 15
@@ -69,18 +74,35 @@ public enum SessionWatch {
         markers.contains { ps.contains($0) }
     }
 
+    /// The same, line by line, leaving out lines that carry one of `excluding`. With nothing to
+    /// leave out it is `isAlive(markers:ps:)`.
+    public static func isAlive(markers: [String], excluding: [String], ps: String) -> Bool {
+        guard !excluding.isEmpty else { return isAlive(markers: markers, ps: ps) }
+        return ps.split(whereSeparator: \.isNewline).contains { line in
+            markers.contains { line.contains($0) } && !excluding.contains { line.contains($0) }
+        }
+    }
+
+    public static func isAlive(_ session: GameSession, ps: String) -> Bool {
+        isAlive(markers: session.markers, excluding: session.excluding, ps: ps)
+    }
+
     public static func currentProcessList() -> String {
         (try? Shell.capture("/bin/ps", ["axww"])) ?? ""
     }
 
     /// Process ids of the game's own processes inside a prefix, by command line. Used by Stop;
     /// Steam and the wineserver are left alone so a second game can follow without a cold start.
-    public static func pids(ofPrefix prefix: URL, markers: [String]) -> [pid_t] {
+    public static func pids(ofPrefix prefix: URL, markers: [String], excluding: [String] = []) -> [pid_t] {
         ProcessTable.processes(ofPrefix: prefix).filter { pid in
             guard let cl = ProcessTable.commandLineAndEnvironment(of: pid) else { return false }
             let joined = cl.arguments.joined(separator: " ")
-            return markers.contains { joined.contains($0) }
+            return markers.contains { joined.contains($0) } && !excluding.contains { joined.contains($0) }
         }
+    }
+
+    public static func pids(ofPrefix prefix: URL, session: GameSession) -> [pid_t] {
+        pids(ofPrefix: prefix, markers: session.markers, excluding: session.excluding)
     }
 
     public static func append(_ record: SessionRecord, to logs: URL) {
