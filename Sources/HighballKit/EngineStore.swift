@@ -200,7 +200,16 @@ public struct EngineStore: Sendable {
         public let id: String
         public let installed: Bool
         public let missing: Bool
-        public init(id: String, installed: Bool, missing: Bool = false) { self.id = id; self.installed = installed; self.missing = missing }
+        /// The manifest's display name, which says what sets revisions apart (a D3DMetal 4 beta, say).
+        /// The pickers showed bare ids, so a player looking for Game Porting Toolkit 4 could not tell
+        /// r26 from r27 (highball#546). Nil for a missing engine, whose manifest is gone with it.
+        public let displayName: String?
+        public init(id: String, installed: Bool, missing: Bool = false, displayName: String? = nil) {
+            self.id = id; self.installed = installed; self.missing = missing; self.displayName = displayName
+        }
+        /// What a picker row says: the display name and the id players and replies refer to, the same
+        /// "name · id" the game page shows when only one engine is offered.
+        public var label: String { displayName.map { "\($0) · \(id)" } ?? id }
     }
     public static func offeredEngines(installed: [InstalledEngine], known: [EngineManifest], current: String? = nil,
                                       macOS: String = EngineManifest.currentMacOS) -> [OfferedEngine] {
@@ -208,12 +217,12 @@ public struct EngineStore: Sendable {
         let ids = Set(installed.map(\.id))
         let arch = installed.first { $0.id == current }?.manifest.arch ?? known.first { $0.id == current }?.arch
         let have = installed.filter { sameArch(current: arch, target: $0.manifest.arch) }
-            .sorted { newestFirst($0.id, $1.id) }.map { OfferedEngine(id: $0.id, installed: true) }
+            .sorted { newestFirst($0.id, $1.id) }.map { OfferedEngine(id: $0.id, installed: true, displayName: $0.manifest.displayName) }
         // A manifest with a macOS floor above this Mac is not offered: it would download and
         // then run untested (r6's D3DMetal was measured on 27 only). Installed engines stay listed.
         let more = known.filter { !ids.contains($0.id) && $0.runs(onMacOS: macOS) && sameArch(current: arch, target: $0.arch) }
             .sorted { newestFirst($0.id, $1.id) }
-            .map { OfferedEngine(id: $0.id, installed: false) }
+            .map { OfferedEngine(id: $0.id, installed: false, displayName: $0.displayName) }
         var rows = have + more
         if let current, !rows.contains(where: { $0.id == current }) { rows.append(OfferedEngine(id: current, installed: false, missing: true)) }
         return rows
