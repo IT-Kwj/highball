@@ -493,7 +493,7 @@ struct GameDetailView: View {
                                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        if item.source == .steam {
+                        if item.source == .steam || item.source == .epic {
                             HStack(alignment: .top, spacing: 12) {
                                 Text(L("Launch arguments")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)
                                 VStack(alignment: .leading, spacing: 4) {
