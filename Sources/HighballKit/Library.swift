@@ -213,6 +213,34 @@ public enum LibraryIndex {
     }
 }
 
+/// The library as `highball library` prints it (highball#432): a game per line, led by the id
+/// `highball play` takes, then the name the player sees, its environment and whether it can be
+/// played. Tab-separated so a frontend's script can cut it; `--json` gives the same entries.
+public enum LibraryListing {
+    public struct Entry: Codable, Equatable, Sendable {
+        public let id: String
+        public let title: String
+        public let source: String
+        public let environment: String?
+        public let installed: Bool
+        public let installedOnMac: Bool
+    }
+
+    /// `title` is the name shown in the app: a custom one (NameStore) or the store's.
+    public static func entry(_ item: LibraryItem, title: String) -> Entry {
+        Entry(id: item.id, title: title, source: item.source.rawValue, environment: item.bottleName,
+              installed: item.installed, installedOnMac: item.installedOnMac)
+    }
+
+    public static func line(_ entry: Entry) -> String {
+        func field(_ text: String) -> String {
+            text.replacingOccurrences(of: "[\t\r\n]+", with: " ", options: .regularExpression)
+        }
+        let state = entry.installed ? "installed" : entry.installedOnMac ? "installed on Mac" : "not installed"
+        return [entry.id, field(entry.title), field(entry.environment ?? "-"), state].joined(separator: "\t")
+    }
+}
+
 /// Which existing environment a game that needs another engine should use (highball-db#318).
 /// The engine ask offers the best one before "New environment", so pressing Play again after
 /// making one never makes a second. An environment holding the game comes first, then one
