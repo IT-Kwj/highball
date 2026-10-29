@@ -3177,6 +3177,10 @@ final class AppState {
             // The variables this game's recipe scoped to it (highball#198), on top of Legendary's.
             let row = gameDB.byEpicAppName[game.app_name]
             let gameEnvironment = bottle.settings.environment(forGame: row?.id)
+            // The row's launch arguments, then the ones the player set on the game's page, after
+            // Legendary's, as for Steam games. Epic games had no way to pass any short of editing
+            // Legendary's config.ini by hand (a player on Discord, 2026-10-26).
+            arguments += (row?.effectiveLaunchArgs() ?? []) + (libraryLaunchArgs["epic:\(game.app_name)"] ?? [])
             watchedLaunch(box) {
                 try await runner.start(executable, arguments: arguments,
                                        renderer: renderer, extraEnvironment: info.environment.merging(gameEnvironment) { _, new in new },
