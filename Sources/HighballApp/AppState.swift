@@ -278,7 +278,7 @@ final class AppState {
     func rebuildLibrary() {
         customNames = nameStore.names()
         libraryItems = LibraryIndex.build(bottles: bottles, steamByBottle: gamesByBottle,
-                                          steamOwnedByBottle: steamOwnedByBottle, macInstalled: macSteamGames,
+                                          steamOwnedByBottle: steamOwnedByBottle, macInstalled: includeMacSteam ? macSteamGames : [],
                                           epicOwned: epicOwned, epicInstalls: epicInstalls,
                                           plays: libraryPlays, defaultBottle: defaultBottle?.name,
                                           pinExists: { bottle, pin in
@@ -288,6 +288,30 @@ final class AppState {
         sortLibraryByDisplayTitle()
         if let deferred = deferredPlayLink { resolvePlayLink(deferred.request) }
         refreshMacFlags()
+    }
+
+    // MARK: Games kept out of the library (highball#445)
+
+    /// Library ids the player hid (LibraryStore). The library leaves them out unless its Hidden
+    /// filter is on; nothing else about the game changes.
+    var hiddenItems: Set<String> = []
+    func isHidden(_ item: LibraryItem) -> Bool { LibraryStore.isHidden(item.id, in: hiddenItems) }
+    func setHidden(_ hidden: Bool, for item: LibraryItem) {
+        guard hidden != isHidden(item) else { return }
+        libraryStore.setHidden(hidden, for: item.id)
+        hiddenItems = libraryStore.hiddenIDs()
+        appendLog("\(item.id): \(hidden ? "hidden from the library" : "back in the library")")
+    }
+
+    /// Whether the games Steam for Mac installed are listed. Off, Highball leaves Steam for Mac out:
+    /// its installs get no tile and count as not installed, so Play uses the Windows version.
+    var includeMacSteam = true
+    func setIncludeMacSteam(_ on: Bool) {
+        guard on != includeMacSteam else { return }
+        libraryStore.setIncludesMacSteam(on)
+        includeMacSteam = on
+        rebuildLibrary()
+        appendLog(on ? "games from Steam for Mac are listed in the library" : "games from Steam for Mac are left out of the library")
     }
 
     // MARK: Names people give their games
@@ -1054,6 +1078,8 @@ final class AppState {
         libraryOverrides = libraryStore.rendererOverrides()
         libraryLaunchArgs = libraryStore.launchArguments()
         libraryDisplays = libraryStore.displayChoices()
+        hiddenItems = libraryStore.hiddenIDs()
+        includeMacSteam = libraryStore.includesMacSteam
         rebuildLibrary()
         steamOwnedRefresh()
         epicRefresh()

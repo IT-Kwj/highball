@@ -645,5 +645,12 @@ enum L10n {
         "Programs here start with %@ until this is resolved: %@": "Les programmes d'ici démarrent avec %@ tant que ce n'est pas résolu : %@",
         "-dx11 -skiplauncher \"an argument with spaces\"": "-dx11 -skiplauncher \"un argument avec des espaces\"",
         "authorizationCode": "authorizationCode",
+        "Hidden": "Masqué",
+        "Hide from library": "Masquer de la bibliothèque",
+        "Show in library": "Afficher dans la bibliothèque",
+        "Shows the games you hid. Show in library on a game's menu brings it back.": "Affiche les jeux que vous avez masqués. Afficher dans la bibliothèque, dans le menu d’un jeu, le fait revenir.",
+        "Takes the game out of the library without touching it. The Hidden filter lists it again.": "Retire le jeu de la bibliothèque sans y toucher. Le filtre Masqué le montre de nouveau.",
+        "Show games from Steam for Mac": "Afficher les jeux de Steam pour Mac",
+        "Games Steam for Mac installed are listed next to your Windows games, and Play opens their Mac version. Off, the library lists only what Highball's environments hold, and Play uses the Windows version.": "Les jeux installés par Steam pour Mac apparaissent à côté de vos jeux Windows, et Jouer ouvre leur version Mac. Désactivé, la bibliothèque ne montre que le contenu des environnements de Highball, et Jouer utilise la version Windows.",
     ]
 }

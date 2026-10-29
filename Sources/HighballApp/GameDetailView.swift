@@ -142,6 +142,18 @@ struct GameDetailView: View {
             if let played = item.lastPlayed {
                 row(L("Last played"), played.formatted(date: .abbreviated, time: .shortened))
             }
+            // Hiding keeps the game and its settings, it only leaves the library's grid and the
+            // installed row (highball#445).
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(L("Library")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
+                if state.isHidden(item) {
+                    Text(L("Hidden")).font(.callout)
+                    Button(L("Show in library")) { state.setHidden(false, for: item) }.controlSize(.small)
+                } else {
+                    Button(L("Hide from library")) { state.setHidden(true, for: item) }.controlSize(.small)
+                        .help(L("Takes the game out of the library without touching it. The Hidden filter lists it again."))
+                }
+            }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
         .background(HB.card, in: RoundedRectangle(cornerRadius: 12))
