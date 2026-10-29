@@ -136,9 +136,8 @@ public struct GOGSettings: Codable, Sendable, Equatable {
     public static let turnedOff = "turned off"
     public static let crashedWithComet = "crashed with comet"
     public var cloudSavesOff: Set<String> = []
-    /// Programs added by hand whose settings (arguments, display, graphics mode) were carried
-    /// to their GOG tile once (LibraryIndex.gogCoveredPins); never again, so a later change on
-    /// the GOG tile stays.
+    /// Programs added by hand whose settings, name and cover were carried to their GOG tile once
+    /// (LibraryIndex.carryOver); never again, so a later change on the GOG tile stays.
     public var carriedOverPins: Set<String> = []
 
     public init() {}

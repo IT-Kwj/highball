@@ -49,32 +49,75 @@ public struct GOGStore: Sendable {
     var userFile: URL { dir.appending(path: "user.json") }
     var dummyServiceDir: URL { paths.home.appending(path: "tools/comet-dummy-service", directoryHint: .isDirectory) }
 
-    /// Downloads and verifies a pinned tool if missing.
-    private func ensure(_ component: EngineManifest.Component, name: String, at binary: URL,
-                        progress: DownloadProgress?) async throws -> URL {
-        if FileManager.default.fileExists(atPath: binary.path) { return binary }
+    /// Downloads and verifies a pinned tool when it is missing, or when the file there is not the
+    /// pinned build: a pin moved to a newer gogdl or comet reaches existing installs, and a
+    /// damaged copy is replaced. The new file is written beside the old one and renamed over it,
+    /// so a gogdl or comet running at that moment keeps its own file and nothing ever runs half a
+    /// copy.
+    func ensure(_ component: EngineManifest.Component, name: String, at binary: URL,
+                progress: DownloadProgress?) async throws -> URL {
+        if isPinned(binary, sha256: component.sha256) { return binary }
         let file = try await EngineStore(paths: paths).download(component, name: name, progress: progress)
-        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: binary)
-        try FileManager.default.copyItem(at: file, to: binary)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        let folder = binary.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let staged = folder.appending(path: ".\(binary.lastPathComponent).\(UUID().uuidString).new")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try FileManager.default.copyItem(at: file, to: staged)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
         // Checksum-verified above; quarantine would otherwise block the unsigned binaries.
-        try? Shell.run("/usr/bin/xattr", ["-c", binary.path])
+        try? Shell.run("/usr/bin/xattr", ["-c", staged.path])
+        guard rename(staged.path, binary.path) == 0 else {
+            throw HighballError.failed("Could not put \(name) in place: \(String(cString: strerror(errno)))")
+        }
+        Self.rememberVerified(binary, sha256: component.sha256)
         return binary
+    }
+
+    /// Files whose checksum matched, by path, with the size and modification date they had then:
+    /// a tool is hashed again only when it changed, not on every sign-in check or launch.
+    private static let verified = OSAllocatedUnfairLock(initialState: [String: (size: Int64, modified: Date, sha256: String)]())
+
+    /// Whether the file at `binary` is the pinned build.
+    func isPinned(_ binary: URL, sha256 expected: String) -> Bool {
+        guard let stamp = Self.fileStamp(binary) else { return false }
+        let expected = expected.lowercased()
+        if let known = Self.verified.withLock({ $0[binary.path] }), known.size == stamp.size, known.modified == stamp.modified {
+            return known.sha256 == expected
+        }
+        guard let actual = try? EngineStore(paths: paths).sha256(of: binary) else { return false }
+        Self.verified.withLock { $0[binary.path] = (stamp.size, stamp.modified, actual) }
+        return actual == expected
+    }
+
+    private static func rememberVerified(_ binary: URL, sha256: String) {
+        guard let stamp = fileStamp(binary) else { return }
+        verified.withLock { $0[binary.path] = (stamp.size, stamp.modified, sha256.lowercased()) }
+    }
+
+    private static func fileStamp(_ url: URL) -> (size: Int64, modified: Date)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = (attributes[.size] as? NSNumber)?.int64Value,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        return (size, modified)
     }
 
     public func ensureInstalled(progress: DownloadProgress? = nil) async throws {
         _ = try await ensure(Self.gogdl, name: "gogdl", at: gogdlBinary, progress: progress)
     }
 
-    /// comet and its placeholder service. Failing here never stops a launch (see GOGComet).
+    /// comet and its placeholder service. Failing here never stops a launch (see GOGComet). The
+    /// service is unpacked again when the pinned archive changes: the archive's checksum is kept
+    /// beside it.
     public func ensureComet(progress: DownloadProgress? = nil) async throws -> (comet: URL, service: URL) {
         let comet = try await ensure(Self.comet, name: "comet", at: cometBinary, progress: progress)
         let exe = dummyServiceDir.appending(path: "GalaxyCommunication.exe")
-        if !FileManager.default.fileExists(atPath: exe.path) {
+        let stamp = dummyServiceDir.appending(path: ".sha256")
+        let unpacked = (try? String(contentsOf: stamp, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !FileManager.default.fileExists(atPath: exe.path) || unpacked != Self.dummyService.sha256.lowercased() {
             let zip = try await EngineStore(paths: paths).download(Self.dummyService, name: "comet-dummy-service", progress: progress)
             try FileManager.default.createDirectory(at: dummyServiceDir, withIntermediateDirectories: true)
             try Shell.run("/usr/bin/ditto", ["-x", "-k", zip.path, dummyServiceDir.path])
+            try? Self.dummyService.sha256.lowercased().write(to: stamp, atomically: true, encoding: .utf8)
         }
         return (comet, exe)
     }

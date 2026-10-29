@@ -292,7 +292,7 @@ final class AppState {
         libraryItems = LibraryIndex.build(bottles: bottles, steamByBottle: gamesByBottle,
                                           steamOwnedByBottle: steamOwnedByBottle, macInstalled: macSteamGames,
                                           epicOwned: epicOwned, epicInstalls: epicInstalls,
-                                          gogGames: gogGames, gogInstalledByBottle: gogInstalledByBottle,
+                                          gogGames: gogGames, gogInstalledByBottle: gogInstalledByBottle, gogLaunchChoice: gogSettings.launchChoice,
                                           plays: libraryPlays, defaultBottle: defaultBottle?.name,
                                           pinExists: { bottle, pin in
                                               // follows links, so a link to a file that is gone counts as missing
@@ -1932,7 +1932,10 @@ final class AppState {
     }
 
     private func resolvePlayLink(_ request: PlayLink.Request) {
-        if let item = libraryItems.first(where: { $0.id == request.target.libraryID }) {
+        // A program its GOG tile now stands for has no tile of its own: a Mac app made for it before
+        // still plays it, as the GOG game (launch(pin:)), and does not say it is not in the library.
+        if let item = libraryItems.first(where: { $0.id == request.target.libraryID })
+            ?? LibraryIndex.coveredPinItem(forLink: request.target, bottles: bottles, gogInstalledByBottle: gogInstalledByBottle) {
             deferredPlayLink = nil
             if request.token == PlayLink.token(in: paths) { play(item) } else { pendingPlayLink = item }
             return
@@ -2608,9 +2611,11 @@ final class AppState {
     func launch(pin: Pin, in bottle: Bottle) {
         // A program its GOG tile stands for plays as that game, with comet and cloud saves,
         // wherever it was started from (the environment's Programs list, a tile from before).
-        if let item = gogItem(standingFor: pin, in: bottle) {
+        // It runs the program and arguments the player picked, whatever the GOG tile plays.
+        if let standing = gogItem(standingFor: pin, in: bottle) {
+            let (item, covered) = standing
             appendLog("\(pin.name): playing it as \(item.title) from GOG, for achievements and cloud saves")
-            gogPlay(item, in: bottle, renderer: pin.renderer)
+            gogPlay(item, in: bottle, renderer: pin.renderer, as: covered)
             return
         }
         guard let engine = engine(for: bottle) else { return }
@@ -3295,45 +3300,36 @@ final class AppState {
         if !newIDs.isEmpty, !gogFetchInFlight { gogRefresh() }
     }
 
-    /// The GOG tile that stands for a program added by hand (LibraryIndex.gogCoveredPins), if any.
-    /// Read off the environment's saved pins, so a launch-time mode on `pin` does not hide it.
-    private func gogItem(standingFor pin: Pin, in bottle: Bottle) -> LibraryItem? {
+    /// The GOG tile a program added by hand plays as (LibraryIndex.gogCoveredPins), if any, with
+    /// what the program runs. Read off the environment's saved pins, so a launch-time mode on
+    /// `pin` does not hide it.
+    private func gogItem(standingFor pin: Pin, in bottle: Bottle) -> (LibraryItem, LibraryIndex.CoveredPin)? {
         let id = "pin:\(bottle.name):\(pin.id.uuidString)"
         guard let covered = LibraryIndex.gogCoveredPins(bottles: [bottle], gogInstalledByBottle: gogInstalledByBottle)
-            .first(where: { $0.pinItemID == id }) else { return nil }
-        return libraryItems.first { $0.id == covered.gogItemID }
+            .first(where: { $0.pinItemID == id }),
+              let item = libraryItems.first(where: { $0.id == covered.gogItemID }) else { return nil }
+        return (item, covered)
     }
 
     /// A program added by hand that its GOG tile now stands for (LibraryIndex.gogCoveredPins)
-    /// hands its settings to that tile once: arguments the GOG task does not already pass, the
-    /// display, the graphics mode. Only where the GOG tile has none of its own, and only once per
-    /// pin, so the pin's tile can leave the library without the game playing differently.
+    /// hands its settings, name and cover to that tile once (LibraryIndex.carryOver),
+    /// so the pin's tile can leave the library without the game playing or looking different.
     private func carryOverGOGCoveredPins() {
         // Read from disk, not `gogSettings`: a rebuild can come before gogRefresh has loaded it,
         // and saving the empty default would wipe the player's GOG choices.
         var settings = GOGSettings.load(gogStore)
-        let covered = LibraryIndex.gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle)
-            .filter { !settings.carriedOverPins.contains($0.pinItemID) }
+        let covered = LibraryIndex.gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle, launchChoice: settings.launchChoice)
+            .filter { $0.tilePlaysIt && !LibraryIndex.wasCarriedOver($0.pinItemID, in: settings.carriedOverPins) }
         guard !covered.isEmpty else { return }
-        let store = libraryStore
-        for pin in covered {
-            if !pin.extraArguments.isEmpty, libraryLaunchArgs[pin.gogItemID] == nil {
-                store.setLaunchArguments(pin.extraArguments, for: pin.gogItemID)
-            }
-            if let display = libraryDisplays[pin.pinItemID], libraryDisplays[pin.gogItemID] == nil {
-                store.setDisplay(display, for: pin.gogItemID)
-            }
-            if let renderer = libraryOverrides[pin.pinItemID], libraryOverrides[pin.gogItemID] == nil {
-                store.setRendererOverride(renderer, for: pin.gogItemID)
-            }
-            settings.carriedOverPins.insert(pin.pinItemID)
-            appendLog("\(pin.pinItemID): shown as its GOG game (\(pin.gogItemID)) from now on; its settings went along")
-        }
+        for line in LibraryIndex.carryOver(covered, paths: paths, settings: &settings) { appendLog(line) }
         settings.save(gogStore)
         gogSettings = settings
+        let store = libraryStore
         libraryOverrides = store.rendererOverrides()
         libraryLaunchArgs = store.launchArguments()
         libraryDisplays = store.displayChoices()
+        customNames = nameStore.names()
+        coverVersion += 1
     }
 
     /// The copy of a GOG game in an environment, read from disk.
@@ -3507,7 +3503,10 @@ final class AppState {
     /// once with comet running starts again straight away without it. When that second start
     /// works, the game is remembered as one that runs without comet (its page says so and can
     /// turn it back on); when it crashes too, comet was not the cause and nothing is remembered.
-    func gogPlay(_ item: LibraryItem, in bottle: Bottle, renderer: Renderer? = nil, retryingWithoutComet: Bool = false) {
+    /// `pin` is a program added by hand that plays as this game (LibraryIndex.CoveredPin): its own
+    /// task and arguments run instead of the ones the game's page picks.
+    func gogPlay(_ item: LibraryItem, in bottle: Bottle, renderer: Renderer? = nil, as pin: LibraryIndex.CoveredPin? = nil,
+                 retryingWithoutComet: Bool = false) {
         guard let engine = engine(for: bottle), let game = gogInstalled(item, in: bottle) else {
             fail(HighballError.failed("\(item.title) is not installed in \(bottle.name)."))
             return
@@ -3516,13 +3515,13 @@ final class AppState {
             fail(HighballError.failed("\(item.title) is already running."))
             return
         }
-        guard let task = game.launchTask(choice: gogSettings.launchChoice[game.id]), let launch = GOGStore.launch(task, in: game) else {
+        guard let task = pin?.task ?? game.launchTask(choice: gogSettings.launchChoice[game.id]), let launch = GOGStore.launch(task, in: game) else {
             fail(HighballError.failed("\(item.title)'s GOG files name no program to run. Show the game's folder and add its .exe as a program instead."))
             return
         }
         let store = gogStore
         let settings = gogSettings
-        let extraArguments = launchArguments(for: item)   // the page's Launch arguments, after the task's own
+        let extraArguments = pin?.extraArguments ?? launchArguments(for: item)   // the page's Launch arguments, after the task's own
         let useComet = !retryingWithoutComet && gogSignedIn && settings.cometOff[game.id] == nil
         let useSaves = gogSignedIn && !settings.cloudSavesOff.contains(game.id)
         runBusy(String(format: L("Starting %@"), item.title), done: .handedOff, stop: .killBottle(bottle, label: L("Stop"))) { [self] in
@@ -3595,7 +3594,7 @@ final class AppState {
                     appendLog("\(item.title) closed right away with comet running; starting it again without comet")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                         guard let self, let fresh = self.bottles.first(where: { $0.name == bottle.name }) else { return }
-                        self.gogPlay(item, in: fresh, renderer: renderer, retryingWithoutComet: true)
+                        self.gogPlay(item, in: fresh, renderer: renderer, as: pin, retryingWithoutComet: true)
                     }
                 }
                 return
@@ -3795,6 +3794,7 @@ final class AppState {
         gogSettings.launchChoice[id] = index
         gogSettings.save(gogStore)
         forgetProgramExecutables()
+        rebuildLibrary()   // a program added by hand shows its own tile only while the GOG tile plays another
     }
 
     /// Removes a GOG game from an environment: its own uninstaller first when an offline installer

@@ -95,50 +95,129 @@ public enum LibraryIndex {
     }
 
     /// A program added by hand that is a GOG game the library now shows, in the same environment
-    /// (a pin made before Connect GOG, or for a game an offline installer put there): it runs one
-    /// of the game's own launch programs, or a variant beside the main one (Control_DX11.exe next
-    /// to Control.exe). The GOG tile stands for it, so the pin's own tile is left out; the pin
-    /// itself stays in the environment's settings. Anything else in the folder (a settings tool,
-    /// a mod launcher) keeps its tile, and so does a pin with its own variables or graphics mode,
-    /// which the GOG tile could not carry.
+    /// (a pin made before Connect GOG, or for a game an offline installer put there): it runs
+    /// exactly one of the programs the GOG tile can play, the game's own launch task or one of
+    /// the choices on its page. Started itself, it plays as that game, with comet and cloud saves,
+    /// and runs that program (AppState.launch(pin:)). Its own tile is left out only while the GOG
+    /// tile's Play runs the same program; the pin itself stays in the environment's settings.
+    /// Anything else keeps its tile and plays the program the player picked: a variant beside the
+    /// main one (Control_DX11.exe next to Control.exe, which GOG's Play would not run), a tool in
+    /// the folder, and a pin with its own variables or graphics mode, which the GOG tile could not
+    /// carry. Installs are read from disk, so this holds for players who never connect GOG too.
     public struct CoveredPin: Equatable, Sendable {
         public let pinItemID: String
         public let gogItemID: String
-        /// The pin's arguments beyond the ones the GOG launch task already passes, for the GOG
+        /// The pin's arguments beyond the ones its GOG launch task already passes, for the GOG
         /// tile's launch arguments (Quake II RTX pinned with +set vid_rtx 0 keeps it).
         public let extraArguments: [String]
+        /// The GOG launch task the pin runs.
+        public let task: GOGStore.PlayTask
+        /// Whether the GOG tile's Play runs that task too, with the launch choice made on the game's
+        /// page: only then does the tile stand for the pin's own (Ghostrunner pinned with -dx12
+        /// keeps its tile while the page plays the game's default).
+        public let tilePlaysIt: Bool
     }
 
-    public static func gogCoveredPins(bottles: [Bottle], gogInstalledByBottle: [String: [GOGStore.InstalledGame]]) -> [CoveredPin] {
+    /// `launchChoice` is GOGSettings.launchChoice, what each GOG tile's Play runs.
+    public static func gogCoveredPins(bottles: [Bottle], gogInstalledByBottle: [String: [GOGStore.InstalledGame]],
+                                      launchChoice: [String: Int] = [:]) -> [CoveredPin] {
         var covered: [CoveredPin] = []
         for bottle in bottles {
             let games = gogInstalledByBottle[bottle.name] ?? []
             guard !games.isEmpty else { continue }
             for pin in bottle.settings.pins where !isLauncherPin(pin) && pin.environment.isEmpty && pin.renderer == nil {
-                let file = pin.launchURL(driveC: bottle.driveC).standardizedFileURL
-                guard let game = games.first(where: { gogLaunches($0, file) }) else { continue }
+                let file = pin.launchURL(driveC: bottle.driveC)
+                guard let found = games.lazy.compactMap({ game in gogTask(game, runBy: file, arguments: pin.arguments).map { (game, $0) } }).first
+                else { continue }
+                let (game, task) = found
                 var extra = pin.arguments
-                let taskArguments = game.launchTask().flatMap { GOGStore.launch($0, in: game) }?.arguments ?? []
+                let taskArguments = GOGStore.launch(task, in: game)?.arguments ?? []
                 for argument in taskArguments { if let i = extra.firstIndex(of: argument) { extra.remove(at: i) } }
                 covered.append(CoveredPin(pinItemID: "pin:\(bottle.name):\(pin.id.uuidString)", gogItemID: "gog:\(game.id)",
-                                          extraArguments: extra))
+                                          extraArguments: extra, task: task,
+                                          tilePlaysIt: game.launchTask(choice: launchChoice[game.id]) == task))
             }
         }
         return covered
     }
 
-    /// Whether `file` is one of the game's launch programs, or a build variant beside the main one.
-    /// Compared without case, as Windows paths are.
-    static func gogLaunches(_ game: GOGStore.InstalledGame, _ file: URL) -> Bool {
-        let path = file.path.lowercased()
-        let programs = game.tasks.filter(\.isFile).compactMap { GOGStore.launch($0, in: game)?.executable.standardizedFileURL }
-        if programs.contains(where: { $0.path.lowercased() == path }) { return true }
-        guard let main = game.launchTask().flatMap({ GOGStore.launch($0, in: game) })?.executable.standardizedFileURL else { return false }
-        // A build variant is the main name plus "_<something>" (Control_DX11, Control_DX12); a
-        // name that merely starts the same (ControlConfig, ControlLauncher) is a tool.
-        let stem = main.deletingPathExtension().lastPathComponent.lowercased()
-        return file.deletingLastPathComponent().path.lowercased() == main.deletingLastPathComponent().path.lowercased()
-            && file.deletingPathExtension().lastPathComponent.lowercased().hasPrefix(stem + "_")
+    /// The task of the game's that runs `file`, when the GOG tile can play it: the default launch
+    /// task, or one of the page's launch choices. Only the exact program counts, compared without
+    /// case as Windows paths are; a file beside it does not. Several tasks running the same
+    /// program (Ghostrunner and Ghostrunner DX12) are told apart by the arguments: the one whose
+    /// own arguments the pin passes, the most of them first, the default before a choice.
+    static func gogTask(_ game: GOGStore.InstalledGame, runBy file: URL, arguments: [String]) -> GOGStore.PlayTask? {
+        let path = file.standardizedFileURL.path.lowercased()
+        let candidates: [(task: GOGStore.PlayTask, arguments: [String])] = ([game.launchTask()].compactMap { $0 } + game.launchChoices).compactMap { task in
+            guard let launch = GOGStore.launch(task, in: game), launch.executable.standardizedFileURL.path.lowercased() == path else { return nil }
+            return (task, launch.arguments)
+        }
+        func passes(_ wanted: [String]) -> Bool {
+            var left = arguments
+            for argument in wanted {
+                guard let i = left.firstIndex(of: argument) else { return false }
+                left.remove(at: i)
+            }
+            return true
+        }
+        return (candidates.filter { passes($0.arguments) }.max { $0.arguments.count < $1.arguments.count } ?? candidates.first)?.task
+    }
+
+    /// The program a play link names when the library leaves its tile out for its GOG tile
+    /// (gogCoveredPins), so a Mac app made for it before keeps working: Play still runs that
+    /// program, as the GOG game (AppState.launch(pin:)), whatever the GOG tile plays. Found by its
+    /// own id too when its environment was renamed since (PinID).
+    public static func coveredPinItem(forLink target: PlayLink.Target, bottles: [Bottle],
+                                      gogInstalledByBottle: [String: [GOGStore.InstalledGame]]) -> LibraryItem? {
+        guard case let .pin(_, uuid) = target else { return nil }
+        let covered = gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle)
+        guard let found = covered.first(where: { $0.pinItemID == target.libraryID })
+                ?? covered.first(where: { PinID.uuid(in: $0.pinItemID) == uuid.uuidString }),
+              let bottle = bottles.first(where: { found.pinItemID == "pin:\($0.name):\(uuid.uuidString)" }),
+              let pin = bottle.settings.pins.first(where: { $0.id == uuid }) else { return nil }
+        return LibraryItem(source: .pin, id: found.pinItemID, title: pin.name, bottleName: bottle.name, installed: true, pinID: pin.id)
+    }
+
+    /// Hands what a program added by hand had to the GOG tile that now stands for it
+    /// (gogCoveredPins, while the tile plays the same program), once per program, so the program's
+    /// tile can leave the library without the game playing or looking different: the arguments its
+    /// GOG task does not already pass, the display, the graphics mode, and the name and cover the
+    /// player gave it. A setting goes only where the GOG tile has none of its own, since one set
+    /// there was the player's choice for the game. When it was last played needs no carrying: the
+    /// GOG tile shows the latest play of the programs it stands for (build). The program keeps its
+    /// own copy of everything, so its tile comes back as it was when the GOG tile stops standing
+    /// for it. Returns a line per program for the log.
+    @discardableResult
+    public static func carryOver(_ covered: [CoveredPin], paths: HighballPaths, settings: inout GOGSettings) -> [String] {
+        let store = LibraryStore(paths: paths), names = NameStore(paths: paths), covers = CoverStore(paths: paths)
+        var lines: [String] = []
+        for pin in covered where pin.tilePlaysIt && !wasCarriedOver(pin.pinItemID, in: settings.carriedOverPins) {
+            let (from, to) = (pin.pinItemID, pin.gogItemID)
+            if !pin.extraArguments.isEmpty, store.launchArguments()[to] == nil {
+                store.setLaunchArguments(pin.extraArguments, for: to)
+            }
+            let displays = store.displayChoices()
+            if let display = displays[from], displays[to] == nil { store.setDisplay(display, for: to) }
+            let overrides = store.rendererOverrides()
+            if let renderer = overrides[from], overrides[to] == nil { store.setRendererOverride(renderer, for: to) }
+            let custom = names.names()
+            if let name = NameStore.name(for: from, in: custom), NameStore.name(for: to, in: custom) == nil {
+                try? names.setName(name, for: to)
+            }
+            if covers.coverURL(for: from) != nil, covers.coverURL(for: to) == nil { try? covers.copyCover(from: from, to: to) }
+            settings.carriedOverPins.insert(from)
+            lines.append("\(from): shown as its GOG game (\(to)) from now on; its settings, name and cover went along")
+        }
+        return lines
+    }
+
+    /// Whether a program's things went to its GOG tile already, also under an earlier name of its
+    /// environment (PinID): a rename gives the program a new id, and carrying again would put back
+    /// a name or cover the player has since cleared on the GOG tile.
+    public static func wasCarriedOver(_ pinItemID: String, in carried: Set<String>) -> Bool {
+        if carried.contains(pinItemID) { return true }
+        guard let uuid = PinID.uuid(in: pinItemID) else { return false }
+        return carried.contains { PinID.uuid(in: $0) == uuid }
     }
 
     /// Builds the unified item list. Pure: takes exactly what AppState already holds.
@@ -156,6 +235,7 @@ public enum LibraryIndex {
                              epicInstalls: [String: String],
                              gogGames: [GOGStore.Game] = [],
                              gogInstalledByBottle: [String: [GOGStore.InstalledGame]] = [:],
+                             gogLaunchChoice: [String: Int] = [:],
                              plays: [String: LibraryStore.PlayRecord] = [:],
                              defaultBottle: String? = nil,
                              pinExists: (Bottle, Pin) -> Bool = { _, _ in true }) -> [LibraryItem] {
@@ -246,6 +326,10 @@ public enum LibraryIndex {
         for bottle in bottles {
             for game in gogInstalledByBottle[bottle.name] ?? [] { gogCopies[game.id, default: []].append((bottle.name, game)) }
         }
+        // Programs the GOG tile stands for leave the library (below); their plays show on it.
+        let standing = gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle, launchChoice: gogLaunchChoice)
+            .filter(\.tilePlaysIt)
+        let coveredPins = Set(standing.map(\.pinItemID))
         var gogSeen = Set<String>()
         let gogKnown = Dictionary(gogGames.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for id in gogGames.map(\.id) + gogCopies.keys.sorted() where !gogSeen.contains(id) {
@@ -263,14 +347,13 @@ public enum LibraryIndex {
                 installed: primary != nil, gogID: id, gogSteamAppID: meta?.steamAppID,
                 artworkTall: meta?.artworkTall, artworkWide: meta?.artworkWide,
                 otherBottles: copies.map(\.bottle).filter { $0 != primary?.bottle }.sorted(),
-                lastPlayed: plays[itemID]?.lastPlayedAt))
+                lastPlayed: ([itemID] + standing.filter { $0.gogItemID == itemID }.map(\.pinItemID)).compactMap { plays[$0]?.lastPlayedAt }.max()))
         }
 
         // Custom pins (dropped exes, preinstalled games), no artwork. Installed when the program's
         // file is there: one on a drive that is unplugged, or deleted since, is not (highball#269,
         // the Installed filter kept listing them). `pinExists` is the app's check of the disk;
         // without one every pin counts, so the index stays testable without a filesystem.
-        let coveredPins = Set(gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle).map(\.pinItemID))
         for bottle in bottles {
             for pin in bottle.settings.pins where !isLauncherPin(pin) {
                 let id = "pin:\(bottle.name):\(pin.id.uuidString)"
@@ -552,6 +635,15 @@ public struct CoverStore: Sendable {
             guard let existing = coverURL(for: id) else { return }
             guard (try? FileManager.default.removeItem(at: existing)) != nil else { return }
         }
+    }
+
+    /// Copies one item's chosen cover, as it is, to another item (a program's cover to the GOG
+    /// tile that now stands for it). Nothing happens when the first has none.
+    public func copyCover(from source: String, to target: String) throws {
+        guard let file = coverURL(for: source) else { return }
+        clearCover(for: target)
+        let dest = dir.appending(path: Self.filename(for: target)).appendingPathExtension(file.pathExtension.lowercased())
+        try FileManager.default.copyItem(at: file, to: dest)
     }
 }
 
