@@ -738,7 +738,7 @@ struct Epic: AsyncParsableCommand {
 // MARK: - highball library / play (highball#432)
 
 /// The library as the app builds it, read from disk: the environments' Steam games, installed and
-/// owned, Steam for Mac's installs, the programs added by hand, and with `epic` the Epic account's
+/// owned, Steam for Mac's installs, Battle.net's installs, the programs added by hand, and with `epic` the Epic account's
 /// games, which asks legendary. Not-installed games are homed as the app homes them (AppState's
 /// defaultBottle: the Games environment, else the first with Steam, else the first).
 func currentLibrary(paths: HighballPaths, epic: Bool) -> [LibraryItem] {
@@ -755,8 +755,10 @@ func currentLibrary(paths: HighballPaths, epic: Bool) -> [LibraryItem] {
         FileManager.default.fileExists(atPath: b.driveC.appending(path: "Program Files (x86)/Steam/steam.exe").path)
     }
     let home = bottles.first { $0.name == "Games" } ?? bottles.first(where: hasSteam) ?? bottles.first
+    let battleNet = Dictionary(bottles.map { ($0.name, BattleNetLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
     return LibraryIndex.build(bottles: bottles, steamByBottle: steam, steamOwnedByBottle: owned,
                               macInstalled: MacSteam.installedGames(), epicOwned: epicOwned, epicInstalls: epicInstalls,
+                              battleNetByBottle: battleNet,
                               plays: LibraryStore(paths: paths).load(), defaultBottle: home?.name,
                               pinExists: { b, pin in FileManager.default.fileExists(atPath: pin.executableURL(driveC: b.driveC).path) })
 }
@@ -790,7 +792,7 @@ struct Play: AsyncParsableCommand {
         abstract: "Start a library game through the Highball app, as its Play button does.",
         discussion: """
             The id is one `highball library` lists: steam:<appid>, epic:<app name> or \
-            pin:<environment>:<uuid>, and launcher:<id> opens a launcher. Highball starts it with \
+            pin:<environment>:<uuid>, battlenet:<product code>, and launcher:<id> opens a launcher. Highball starts it with \
             the game's own settings and stays in the background, the way a game's Mac app does. \
             With --wait the command returns once the game has quit, for frontends such as ES-DE, \
             and Highball and Steam keep running. It follows the games Highball runs in its \
@@ -802,7 +804,7 @@ struct Play: AsyncParsableCommand {
 
     func run() async throws {
         guard let target = PlayLink.Target(libraryID: id) else {
-            fail("\(id) is not a library id. `highball library` lists them: steam:<appid>, epic:<app name>, pin:<environment>:<uuid>.")
+            fail("\(id) is not a library id. `highball library` lists them: steam:<appid>, epic:<app name>, pin:<environment>:<uuid>, battlenet:<product code>.")
         }
         let paths = HighballPaths()
         // A typo fails here and now, not as an alert in the app and a wait that never ends.
@@ -814,7 +816,7 @@ struct Play: AsyncParsableCommand {
             guard store.isAuthenticated, EpicStore.installMap((try? store.installedGames()) ?? [])[name] != nil else {
                 fail("\(id) is not an installed Epic game in this Highball. `highball library --installed` lists what can be played.")
             }
-        case .steam, .pin:
+        case .steam, .pin, .battlenet:
             guard currentLibrary(paths: paths, epic: false).contains(where: { $0.id == target.libraryID }) else {
                 fail("\(id) is not in this Highball's library. `highball library` lists the ids.")
             }
