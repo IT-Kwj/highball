@@ -1,11 +1,15 @@
-/* audiobuf: loaded into Wine's processes with DYLD_INSERT_LIBRARIES, it does two things to an output audio unit when
- * Wine starts it.
+/* audiobuf: loaded into Wine's processes with DYLD_INSERT_LIBRARIES, it does three things.
  *
- * It caps the unit's I/O buffer at 5 ms (half of Wine's 10 ms shared-mode period). The device otherwise asks Wine's
- * render callback for its whole buffer at once, 512 frames, 10.7 ms at 48 kHz, and a game that keeps about one period
- * queued (Counter-Strike 2) then had too little at most pulls and Wine played the rest as silence (highball#127). The
- * buffer size is per process. The Wine 11 engine carries the same cap in its own winecoreaudio (highball-engine patch
- * 0015).
+ * It caps the I/O buffer of each audio unit Wine starts at 5 ms (half of Wine's 10 ms shared-mode period). The device
+ * otherwise moves its whole buffer at once, 512 frames, 10.7 ms at 48 kHz, more than a period. For output, a game that
+ * keeps about one period queued (Counter-Strike 2) then had too little at most pulls and Wine played the rest as
+ * silence (highball#127). For a microphone, Wine's capture ring holds the buffer the game asked for (three periods for
+ * a short one) and Wine converts only while more than two periods are in it, so a 512-frame push did not fit and Wine
+ * dropped the oldest 32 frames at nearly every period: 540 breaks in 6 s of a 48 kHz WASAPI capture with a 20 ms buffer,
+ * 3 with the cap (highball#350). A capture unit takes the rate from its input side. Before, only a microphone on a
+ * device that also has outputs got the cap, because the unit's output side was read, and that side has no format on a
+ * microphone alone. The buffer size is per process and per device. The Wine 11 engine also carries the output cap in
+ * its own winecoreaudio (highball-engine patch 0015).
  *
  * It limits float output like the last stage of Windows' audio engine (CAudioLimiter). Windows mixes shared-mode streams
  * in float and limits the result before the device, so a game may hand it samples above 1.0 and never clip. Wine passes
@@ -13,15 +17,28 @@
  * 25 of 30 seconds (measured on an M4, highball-db#349), and loud passages sound harsh. After the unit renders, a
  * frame whose peak would pass 0.99 drops the gain at once to just below it, and the gain comes back toward 1 with a
  * 100 ms time constant. Below the threshold the gain is exactly 1, so sound under full scale passes bit for bit.
- * HB_AUDIOLIMIT=0 turns the limiter off. HB_AUDIOBUF_DEBUG=1 logs each unit and, every 10 s of sound, the frames limited.
+ *
+ * It runs the clock Wine starts for each audio stream (audio_client_timer, which wakes the game every period) in real
+ * time, as Windows runs its audio engine. Wine asks for THREAD_PRIORITY_TIME_CRITICAL, which the Wine 10 engines do not
+ * pass on to macOS, and Wine 10 yields before each of the clock's sleeps. macOS's sched_yield drops the caller to
+ * priority 0 until it runs again, so on a busy Mac the clock woke games late, up to 29 ms, and their sound ran dry
+ * (highball#444). The Wine 11 engines run it at a fixed high priority, which a busy Mac still delayed.
+ *
+ * HB_AUDIOLIMIT=0 turns the limiter off, HB_AUDIORT=0 the real-time clock. HB_AUDIOBUF_DEBUG=1 logs each unit, each
+ * clock made real time and, every 10 s of sound, the frames limited.
  *
  * Shipped as an engine component, whose Wine has no source to patch for the Sikarugir builds.
  * Build: Scripts/build-audiobuf.sh */
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MAX_UNITS 64
 #define THRESHOLD 0.99f
@@ -126,22 +143,65 @@ static void add_limiter(AudioUnit unit)
                          L->interleaved ? "interleaved" : "planar", f.mSampleRate, st == noErr ? "on" : "failed", (int)st);
 }
 
+/* A capture unit is one Wine made with output off on element 0 and input on element 1. Its device side is the input
+ * scope of element 1, an output unit's is the output scope of element 0. */
+static int is_capture(AudioUnit unit)
+{
+    UInt32 in_on = 0, out_on = 1, size = sizeof(UInt32);
+    AudioUnitGetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &in_on, &size);
+    size = sizeof(UInt32);
+    if (AudioUnitGetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &out_on, &size) != noErr) out_on = 1;
+    return in_on && !out_on;
+}
+
 static OSStatus hb_AudioUnitInitialize(AudioUnit unit)
 {
     AudioStreamBasicDescription hw;
+    int capture = is_capture(unit);
     UInt32 hw_size = sizeof(hw), cur = 0, cur_size = sizeof(cur);
-    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &hw, &hw_size) == noErr
+    if (AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, capture ? kAudioUnitScope_Input : kAudioUnitScope_Output,
+                             capture ? 1 : 0, &hw, &hw_size) == noErr
         && hw.mSampleRate > 0
         && AudioUnitGetProperty(unit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &cur, &cur_size) == noErr) {
         UInt32 frames = (UInt32)(hw.mSampleRate * 0.005);
         if (frames > 0 && cur > frames) {
             OSStatus st = AudioUnitSetProperty(unit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &frames, sizeof(frames));
             if (debug())
-                fprintf(stderr, "audiobuf: I/O buffer %u -> %u frames at %.0f Hz, status %d\n", (unsigned)cur, (unsigned)frames, hw.mSampleRate, (int)st);
+                fprintf(stderr, "audiobuf: %s I/O buffer %u -> %u frames at %.0f Hz, status %d\n", capture ? "capture" : "output",
+                        (unsigned)cur, (unsigned)frames, hw.mSampleRate, (int)st);
         }
     }
     OSStatus r = AudioUnitInitialize(unit);
     if (r == noErr) add_limiter(unit);
+    return r;
+}
+
+/* Wine starts one clock thread per audio stream, at THREAD_PRIORITY_TIME_CRITICAL, to wake the stream's client every
+ * period, and the thread names itself audio_client_timer first thing. The policy asks for a slice every 10 ms (Wine's
+ * shared-mode period) within that period. macOS 27 raises a smaller computation to half the constraint anyway (asked
+ * for 2 ms, it reported 5). The thread blocks every period, so it never meets the kernel's limit for real-time threads
+ * that run on, which would send it back to normal scheduling. */
+static void make_realtime(void)
+{
+    mach_timebase_info_data_t tb;
+    if (mach_timebase_info(&tb) != KERN_SUCCESS || !tb.numer) return;
+    double per_ms = 1e6 * tb.denom / tb.numer;               /* Mach ticks per millisecond */
+    thread_time_constraint_policy_data_t p = {
+        .period = (uint32_t)(10 * per_ms),
+        .computation = (uint32_t)(5 * per_ms),
+        .constraint = (uint32_t)(10 * per_ms),
+        .preemptible = 1,
+    };
+    kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                                         (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    if (debug()) fprintf(stderr, "audiobuf: audio_client_timer real time, status %d\n", (int)kr);
+}
+
+static int hb_pthread_setname_np(const char *name)
+{
+    int r = pthread_setname_np(name);
+    const char *off = getenv("HB_AUDIORT");
+    if (name && !strcmp(name, "audio_client_timer") && !(off && off[0] == '0')) make_realtime();
     return r;
 }
 
@@ -163,4 +223,5 @@ __attribute__((used)) static const struct { const void *replacement; const void 
     __attribute__((section("__DATA,__interpose"))) = {
     { (const void *)hb_AudioUnitInitialize, (const void *)AudioUnitInitialize },
     { (const void *)hb_AudioUnitUninitialize, (const void *)AudioUnitUninitialize },
+    { (const void *)hb_pthread_setname_np, (const void *)pthread_setname_np },
 };
