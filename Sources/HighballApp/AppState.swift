@@ -2693,10 +2693,10 @@ final class AppState {
             // a game may still be running under it.
             await BottleStore.preflight(runner: runner, bottle: bottle) { line in Task { @MainActor in self.appendLog(line) } }
             // A client a game's Play started under D3DMetal shows a black window; with no game
-            // running it is restarted so the window gets the mode it draws with (highball#416).
+            // running it is restarted so the window gets the mode it draws with (highball#416, #565).
+            let window = SteamRestart.windowMode(shortcut: pin.renderer, environment: bottle.settings.renderer,
+                                                 dxmtRuns: Renderer.dxmt.availability(in: engine) == .available)
             if isSteamUI(pin),
-               let window = SteamRestart.windowRenderer(shortcut: pin.renderer, environment: bottle.settings.renderer,
-                                                        dxmtRuns: Renderer.dxmt.availability(in: engine) == .available),
                let live = runner.runningSteamEnvironment(), SteamRestart.windowNeedsRestart(live: live, window: window),
                !runner.steamGameIsRunning() {
                 await MainActor.run { self.appendLog("Steam was running with D3DMetal, which leaves its window black, so it restarts with \(Renderer.displayName(window))") }

@@ -27,13 +27,21 @@ public enum SteamRestart {
         return .dxmt
     }
 
+    /// The mode Steam's window opens with: DXMT in place of D3DMetal when `windowRenderer` says so,
+    /// otherwise the shortcut's own mode, otherwise the environment's.
+    public static func windowMode(shortcut: Renderer?, environment: Renderer, dxmtRuns: Bool) -> Renderer {
+        windowRenderer(shortcut: shortcut, environment: environment, dxmtRuns: dxmtRuns) ?? shortcut ?? environment
+    }
+
     /// Whether opening Steam's window should restart the running client first: a game's Play started
-    /// it in a D3DMetal environment, so it runs with D3DMetal and its window is black, while the window
-    /// wants `window`. Show then brought back a black square that only deleting the environment
-    /// cleared (highball#416, Wine 11 on an M5 Pro). The caller checks that no game is running.
-    public static func windowNeedsRestart(live: [String: String], window: Renderer?) -> Bool {
-        guard let window, window != .d3dmetal else { return false }
-        return rendererName(ofLive: live) == Renderer.d3dmetal.rawValue
+    /// it with D3DMetal, so its window is black, while the window opens with `window`. Show then
+    /// brought back a black square that only deleting the environment cleared (highball#416, Wine 11
+    /// on an M5 Pro). The game's mode can come from its own settings or its database row in an
+    /// environment set to DXMT, so the environment's mode says nothing here: Steam's browser then
+    /// answered "steamwebhelper is not responding" at every Show (highball#529, #565). The caller
+    /// checks that no game is running.
+    public static func windowNeedsRestart(live: [String: String], window: Renderer) -> Bool {
+        window != .d3dmetal && rendererName(ofLive: live) == Renderer.d3dmetal.rawValue
     }
 
     /// What became of the running client before a launch.
