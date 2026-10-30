@@ -562,7 +562,7 @@ struct EnvironmentSettingsPage: View {
                                     state.engineTransition = AppState.EngineTransition(bottleName: current.name, targetID: newID)
                                 })) {
                                 ForEach(offered, id: \.id) { e in
-                                    Text(verbatim: e.missing ? "\(e.id) (\(L("missing")))" : e.installed ? e.id : "\(e.id) (\(L("download")))").tag(e.id)
+                                    Text(verbatim: e.missing ? "\(e.label) (\(L("missing")))" : e.installed ? e.label : "\(e.label) (\(L("download")))").tag(e.id)
                                 }
                             }
                             .disabled(state.busy)

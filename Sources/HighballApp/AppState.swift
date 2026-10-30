@@ -34,6 +34,8 @@ final class AppState {
     /// before opening the window; the TabView binds its selection to it.
     var settingsTab: SettingsTab = .environments
     var gamesByBottle: [String: [SteamGame]] = [:]
+    /// What Battle.net installed in each bottle, from its own records (BattleNetLibrary, highball#417).
+    var battleNetByBottle: [String: [BattleNetGame]] = [:]
     /// The Steam account's games per bottle, installed or not (SteamOwnedLibrary, highball#199).
     var steamOwnedByBottle: [String: [OwnedSteamGame]] = [:]
     /// What Steam's app data says about each owned game's Mac build (MacAppInfoBuild), by appid.
@@ -290,9 +292,10 @@ final class AppState {
         customNames = nameStore.names()
         carryOverGOGCoveredPins()
         libraryItems = LibraryIndex.build(bottles: bottles, steamByBottle: gamesByBottle,
-                                          steamOwnedByBottle: steamOwnedByBottle, macInstalled: macSteamGames,
+                                          steamOwnedByBottle: steamOwnedByBottle, macInstalled: includeMacSteam ? macSteamGames : [],
                                           epicOwned: epicOwned, epicInstalls: epicInstalls,
                                           gogGames: gogGames, gogInstalledByBottle: gogInstalledByBottle, gogLaunchChoice: gogSettings.launchChoice,
+                                          battleNetByBottle: battleNetByBottle,
                                           plays: libraryPlays, defaultBottle: defaultBottle?.name,
                                           pinExists: { bottle, pin in
                                               // follows links, so a link to a file that is gone counts as missing
@@ -301,6 +304,30 @@ final class AppState {
         sortLibraryByDisplayTitle()
         if let deferred = deferredPlayLink { resolvePlayLink(deferred.request) }
         refreshMacFlags()
+    }
+
+    // MARK: Games kept out of the library (highball#445)
+
+    /// Library ids the player hid (LibraryStore). The library leaves them out unless its Hidden
+    /// filter is on; nothing else about the game changes.
+    var hiddenItems: Set<String> = []
+    func isHidden(_ item: LibraryItem) -> Bool { LibraryStore.isHidden(item.id, in: hiddenItems) }
+    func setHidden(_ hidden: Bool, for item: LibraryItem) {
+        guard hidden != isHidden(item) else { return }
+        libraryStore.setHidden(hidden, for: item.id)
+        hiddenItems = libraryStore.hiddenIDs()
+        appendLog("\(item.id): \(hidden ? "hidden from the library" : "back in the library")")
+    }
+
+    /// Whether the games Steam for Mac installed are listed. Off, Highball leaves Steam for Mac out:
+    /// its installs get no tile and count as not installed, so Play uses the Windows version.
+    var includeMacSteam = true
+    func setIncludeMacSteam(_ on: Bool) {
+        guard on != includeMacSteam else { return }
+        libraryStore.setIncludesMacSteam(on)
+        includeMacSteam = on
+        rebuildLibrary()
+        appendLog(on ? "games from Steam for Mac are listed in the library" : "games from Steam for Mac are left out of the library")
     }
 
     // MARK: Names people give their games
@@ -677,6 +704,9 @@ final class AppState {
         case .pin:
             guard let pin = bottle.settings.pins.first(where: { $0.id == item.pinID }) else { return }
             launch(pin: pin.launching(with: renderer), in: bottle)
+        case .battlenet:
+            guard let game = battleNetGame(for: item, in: bottle.name) else { return }
+            launchBattleNetGame(game, item: item, in: bottle, renderer: renderer)
         }
     }
 
@@ -1020,6 +1050,7 @@ final class AppState {
     /// directories it watches.
     func refreshInstalledGames() {
         refreshSteamInstalls()
+        refreshBattleNetInstalls()
         let mac = MacSteam.installedGames()
         if mac != macSteamGames { macSteamGames = mac; rebuildLibrary() }
         refreshEpicInstalls()
@@ -1035,6 +1066,31 @@ final class AppState {
         installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         let games = Dictionary(bottles.map { ($0.name, SteamLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
         if games != gamesByBottle { gamesByBottle = games; forgetProgramExecutables(); rebuildLibrary() }
+    }
+
+    /// Re-reads what Battle.net installed in each bottle. Its own watcher calls this when the update
+    /// agent rewrites its records, which it does often during a download, so it reads two small
+    /// files per bottle and nothing else.
+    @ObservationIgnored private var battleNetWatcher: DirectoryWatcher?
+
+    func refreshBattleNetInstalls() {
+        if readBattleNetInstalls() { forgetProgramExecutables(); rebuildLibrary() }
+    }
+
+    /// The reading part, for `refresh` too, which rebuilds the library itself. True on a change.
+    @discardableResult private func readBattleNetInstalls() -> Bool {
+        if battleNetWatcher == nil { battleNetWatcher = DirectoryWatcher { [weak self] in self?.refreshBattleNetInstalls() } }
+        battleNetWatcher?.watch(bottles.map(BattleNetLibrary.agentDirectory(of:)))
+        let games = Dictionary(bottles.map { ($0.name, BattleNetLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
+        guard games != battleNetByBottle else { return false }
+        battleNetByBottle = games
+        return true
+    }
+
+    /// The Battle.net game a library item stands for, in the environment the item is homed in.
+    func battleNetGame(for item: LibraryItem, in bottleName: String? = nil) -> BattleNetGame? {
+        guard let code = item.battleNetProduct, let name = bottleName ?? item.bottleName else { return nil }
+        return battleNetByBottle[name]?.first { $0.productCode == code }
     }
 
     private func refreshEpicInstalls() {
@@ -1085,12 +1141,15 @@ final class AppState {
         if installWatcher == nil { installWatcher = DirectoryWatcher { [weak self] in self?.refreshInstalledGames() } }
         installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         macSteamGames = MacSteam.installedGames()
+        readBattleNetInstalls()
         startSteamClientWatch()
         startDiscordWatch()
         libraryPlays = libraryStore.load()
         libraryOverrides = libraryStore.rendererOverrides()
         libraryLaunchArgs = libraryStore.launchArguments()
         libraryDisplays = libraryStore.displayChoices()
+        hiddenItems = libraryStore.hiddenIDs()
+        includeMacSteam = libraryStore.includesMacSteam
         rebuildLibrary()
         steamOwnedRefresh()
         epicRefresh()
@@ -1535,6 +1594,14 @@ final class AppState {
         return bottle
     }
 
+    /// The other environments with a Steam of their own, by name. The toolbar's Open Steam only
+    /// ever opened the default environment's, so a game living in another one could not reach its
+    /// Steam from there (highball#537); these are offered beside it.
+    var otherSteamBottles: [Bottle] {
+        bottles.filter { $0.name != defaultBottle?.name && !deletingBottles.contains($0.name) && steamInstalled(in: $0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func steamLauncherTitle(in bottle: Bottle) -> String {
         steamClients.contains(bottle.name) ? L("Show Steam") : L("Open Steam")
     }
@@ -1785,9 +1852,21 @@ final class AppState {
     func useEnvironment(_ env: Bottle, for recipe: HighballKit.Recipe, item: LibraryItem) {
         pendingEngine = nil
         let target = item.homed(in: env.name)
+        // The chosen environment becomes the game's home. The library put the game wherever it was
+        // last played, so the next Play went back to the environment on the wrong engine and the
+        // same ask came up every time (highball#537).
+        let lastPlayed = libraryPlays[item.id]?.lastPlayedAt ?? Date()
+        libraryStore.recordPlay(id: item.id, bottle: env.name, date: lastPlayed)
+        libraryPlays[item.id] = LibraryStore.PlayRecord(lastPlayedAt: lastPlayed, bottle: env.name)
+        // A Steam game installed where Play started comes along as a clone, as it does into a new
+        // environment, instead of being handed to that environment's Steam to download again.
+        let source = bottles.first { $0.name == item.bottleName && $0.name != env.name }
+        let carries = !target.installed && (source.map { canCarryGame(item, from: $0) } ?? false)
         let next: () -> Void = { [weak self] in
             guard let self else { return }
-            if target.installed { self.play(target) } else { self.installSteamGame(target) }
+            if target.installed { self.play(target) }
+            else if carries, let source { self.carryAndPlay(item, from: source, into: env) }
+            else { self.installSteamGame(target) }
         }
         if !env.settings.recipes.contains(recipe.id) || !recipe.artifactsPresent(driveC: env.driveC, steamGames: gamesByBottle[env.name] ?? []) {
             applyRecipe(recipe.id, to: env, then: DoneState(
@@ -1796,6 +1875,32 @@ final class AppState {
                 cta: next))
         } else {
             next()
+        }
+    }
+
+    /// Clones a Steam game from `source` into `env`'s Steam library and plays it there; hands it to
+    /// that Steam to install when the clone is refused. Steam in `env` is stopped first, since a
+    /// running client reads the new record only when it starts again.
+    private func carryAndPlay(_ item: LibraryItem, from source: Bottle, into env: Bottle) {
+        guard let appid = item.steamAppID, let engine = engine(for: env),
+              let game = (gamesByBottle[source.name] ?? []).first(where: { $0.appid == appid }),
+              let steam = SteamLibrary.steamRoot(of: env) else { installSteamGame(item.homed(in: env.name)); return }
+        let paths = paths
+        Task { [weak self] in
+            try? await WineRunner(paths: paths, engine: engine, bottle: env).stopSteam()
+            let outcome = SteamGameCarryOver.carry(game, into: steam.appending(path: "steamapps", directoryHint: .isDirectory))
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .carried:
+                    self.appendLog("\(item.title): carried over from '\(source.name)' to '\(env.name)' as a clone, no download and no extra disk space")
+                    self.refresh()
+                    self.play((self.libraryItems.first { $0.id == item.id } ?? item).homed(in: env.name))
+                case .skipped(let why):
+                    self.appendLog("\(item.title): not carried over from '\(source.name)': \(why); the Steam in '\(env.name)' installs it")
+                    self.installSteamGame(item.homed(in: env.name))
+                }
+            }
         }
     }
 
@@ -1988,7 +2093,7 @@ final class AppState {
     private func findProgramExecutable(for item: LibraryItem) -> URL? {
         guard let bottleName = item.bottleName, let bottle = bottles.first(where: { $0.name == bottleName }) else { return nil }
         switch item.source {
-        case .steam, .epic:
+        case .steam, .epic, .battlenet:
             return programFolder(for: item).flatMap { PEIcon.bestExecutable(in: $0) }
         case .gog:
             // The file Play runs, so the per-program settings (display mode) apply to the game itself.
@@ -2017,6 +2122,8 @@ final class AppState {
             folder = gogInstalled(item, in: bottle)?.folder
         case .pin:
             folder = item.pinID.flatMap { id in bottle.settings.pins.first { $0.id == id } }.map { $0.executableURL(driveC: bottle.driveC).deletingLastPathComponent() }
+        case .battlenet:
+            folder = battleNetGame(for: item, in: bottleName)?.folder
         }
         guard let folder else { return nil }
         var isDir: ObjCBool = false
@@ -2405,8 +2512,14 @@ final class AppState {
     // MARK: Sessions (UX plan 0.6)
 
     /// Games running right now, from their processes. The library shows them and offers Stop;
-    /// nothing here blocks the app while a game runs.
-    var runningSessions: [GameSession] = []
+    /// nothing here blocks the app while a game runs. Kept in the home as well (RunningGames), so
+    /// `highball play --wait` returns when its game quits (highball#432).
+    var runningSessions: [GameSession] = [] {
+        didSet {
+            let ids = runningSessions.compactMap(\.libraryID)
+            if ids != oldValue.compactMap(\.libraryID) { RunningGames.write(ids, paths: paths) }
+        }
+    }
     /// The last session that ended, for the post-play prompt to come.
     var lastEndedSession: SessionRecord?
     /// A finished session worth asking about: at least a minute of play (a shorter one is a
@@ -2440,6 +2553,11 @@ final class AppState {
         case .pin:
             guard let pin = bottles.first(where: { $0.name == bottleName })?.settings.pins.first(where: { $0.id == item.pinID }) else { return nil }
             executable = URL(fileURLWithPath: pin.path.replacingOccurrences(of: "\\", with: "/")).lastPathComponent
+        case .battlenet:
+            // The game runs under Battle.net, so its log is that of the launcher Play started.
+            guard let game = battleNetGame(for: item, in: bottleName),
+                  let start = BattleNetLibrary.launch(game, client: bottles.first(where: { $0.name == bottleName }).flatMap(BattleNetLibrary.client(in:))) else { return nil }
+            executable = start.executable.lastPathComponent
         default: return nil
         }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: paths.logs.path)) ?? []
@@ -2472,7 +2590,7 @@ final class AppState {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 let processes = SessionWatch.currentProcessList()
-                if SessionWatch.isAlive(markers: session.markers, ps: processes) {
+                if SessionWatch.isAlive(session, ps: processes) {
                     misses = 0
                     if let prefix = await self?.discordEnvironmentPrefix(for: session),
                        let env = DiscordSessions.environment(for: session, prefix: prefix, processList: processes) {
@@ -2501,7 +2619,7 @@ final class AppState {
             for _ in 0..<60 {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, self.runningSessions.contains(session), NSApp.isActive else { return }
-                let pids = await Task.detached { SessionWatch.pids(ofPrefix: prefix, markers: session.markers) }.value
+                let pids = await Task.detached { SessionWatch.pids(ofPrefix: prefix, session: session) }.value
                 guard let pid = pids.first(where: Self.hasWindowOnScreen),
                       let game = NSRunningApplication(processIdentifier: pid) else { continue }
                 let done = game.activate(from: .current, options: [])
@@ -2535,7 +2653,7 @@ final class AppState {
                     await self.appendLog("\(session.title): chosen display is not connected, leaving the window where it opened")
                     return
                 }
-                for pid in SessionWatch.pids(ofPrefix: prefix, markers: session.markers) {
+                for pid in SessionWatch.pids(ofPrefix: prefix, session: session) {
                     for _ in 0..<WindowMover.move(pid: pid, to: monitor.bounds, alreadyMoved: &handled) {
                         await self.appendLog("moved \(session.title) to \(monitor.name)")
                     }
@@ -2585,10 +2703,10 @@ final class AppState {
             // The environment was deleted while the game "ran": end the record, no ghost prompt.
             endSession(session, reason: "stopped"); postPlay = nil; return
         }
-        let prefix = bottle.url, markers = session.markers
+        let prefix = bottle.url
         // terminate waits out a grace period: off the main thread, then the record.
         Task.detached {
-            _ = ProcessTable.terminate(SessionWatch.pids(ofPrefix: prefix, markers: markers))
+            _ = ProcessTable.terminate(SessionWatch.pids(ofPrefix: prefix, session: session))
             await MainActor.run { self.endSession(session, reason: "stopped") }
         }
     }
@@ -2656,10 +2774,10 @@ final class AppState {
             // a game may still be running under it.
             await BottleStore.preflight(runner: runner, bottle: bottle) { line in Task { @MainActor in self.appendLog(line) } }
             // A client a game's Play started under D3DMetal shows a black window; with no game
-            // running it is restarted so the window gets the mode it draws with (highball#416).
+            // running it is restarted so the window gets the mode it draws with (highball#416, #565).
+            let window = SteamRestart.windowMode(shortcut: pin.renderer, environment: bottle.settings.renderer,
+                                                 dxmtRuns: Renderer.dxmt.availability(in: engine) == .available)
             if isSteamUI(pin),
-               let window = SteamRestart.windowRenderer(shortcut: pin.renderer, environment: bottle.settings.renderer,
-                                                        dxmtRuns: Renderer.dxmt.availability(in: engine) == .available),
                let live = runner.runningSteamEnvironment(), SteamRestart.windowNeedsRestart(live: live, window: window),
                !runner.steamGameIsRunning() {
                 await MainActor.run { self.appendLog("Steam was running with D3DMetal, which leaves its window black, so it restarts with \(Renderer.displayName(window))") }
@@ -2940,6 +3058,61 @@ final class AppState {
         }
     }
 
+    /// Starts a game Battle.net installed the way Battle.net's own shortcut does
+    /// (BattleNetLibrary.launch): the game's launcher hands the request to Battle.net, opening it
+    /// when it is not running, and Battle.net starts the game. As for a Steam game, the game's own
+    /// processes, found by its folder, decide when "starting" ends, so the launcher exiting once it
+    /// has handed over is no crash. Battle.net starts the game with the environment it was itself
+    /// started with: a client already running keeps its graphics mode for the game.
+    func launchBattleNetGame(_ game: BattleNetGame, item: LibraryItem, in bottle: Bottle, renderer: Renderer? = nil) {
+        guard let engine = engine(for: bottle) else { return }
+        if runningSessions.contains(where: { $0.libraryID == item.id && $0.bottleName == bottle.name }) {
+            fail(HighballError.failed("\(game.title) is already running."))
+            return
+        }
+        guard let start = BattleNetLibrary.launch(game, client: BattleNetLibrary.client(in: bottle)) else {
+            fail(HighballError.failed("\(game.title) has no Battle.net launcher in its folder and Battle.net is not installed in \(bottle.name). Install Battle.net there, or open the game from Battle.net."))
+            return
+        }
+        let entry = gameDB.entry(for: item)
+        // The variables this game's recipe scoped to it (highball#198), as for the other stores.
+        let gameEnvironment = bottle.settings.environment(forGame: entry?.id)
+        let marks = BattleNetLibrary.sessionMarkers(for: game)
+        runBusy("Starting \(game.title)",
+                expected: start.throughClient ? L("Battle.net opens, then press Play there") : L("a cold Battle.net can take a couple of minutes"),
+                done: .handedOff,
+                stop: .killBottle(bottle, label: L("Stop"))) { [self] in
+            let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+            await adoptRuntimesInstalledByGames(in: bottle, engine: engine)
+            await removeMacMetadataFiles(from: game.folder, of: game.title)
+            if start.throughClient {
+                appendLog("\(game.title): no Battle.net launcher in its folder, so Battle.net opens and its Play button starts the game")
+            }
+            let box = LaunchOutcome()
+            let log = logLine(box)
+            watchedLaunch(box) {
+                try await runner.start(start.executable, arguments: start.arguments, renderer: renderer,
+                                       extraEnvironment: gameEnvironment,
+                                       workingDirectory: start.executable.deletingLastPathComponent(), onOutput: log)
+            }
+            let handedOff = try await awaitHandoff(box, program: game.title, timeout: 360, exitEndsWait: false) {
+                let processes = await Self.processList()
+                box.processList = processes
+                return SessionWatch.isAlive(markers: marks.markers, excluding: marks.excluding, ps: processes)
+            } crashed: { result in
+                let current = renderer ?? bottle.settings.renderer
+                self.crashSuggestion = CrashSuggestion(program: game.title, bottleName: bottle.name,
+                                                       renderer: Renderer.suggestion(after: current, d3dmetalAvailable: engine.rendererDir("d3dmetal") != nil, vkd3dAvailable: engine.rendererDir("vkd3d") != nil),
+                                                       logPath: result.log.path, current: current, seconds: Int(result.duration),
+                                                       alternateEngine: self.alternateEngine(for: bottle), itemID: item.id)
+            }
+            guard handedOff else { return }
+            beginSession(GameSession(title: game.title, bottleName: bottle.name, appid: nil, markers: marks.markers, excluding: marks.excluding,
+                                     renderer: (renderer ?? bottle.settings.renderer).rawValue, libraryID: item.id,
+                                     startNotice: entry?.startNotice, startNoticeMinutes: entry?.startNoticeMinutes), processList: box.processList)
+        }
+    }
+
     /// Where a launch reports back. The busy work polls this instead of awaiting the task:
     /// `Task.value` is not cancellation-aware, so racing it against a timer blocked until the
     /// process exited and the hand-off never happened (review, 2026-09-04).
@@ -3132,6 +3305,27 @@ final class AppState {
         return EpicStore.isInstalled(path: path, inDriveC: bottle.driveC)
     }
 
+    /// Moves one installed Epic game into another environment, where it then plays with that
+    /// environment's engine and settings while its other games stay put (highball#566: a player
+    /// testing one game on Wine 11 had to edit Legendary's files by hand). The game's home is its
+    /// folder, so moving the folder is the whole move.
+    func moveEpicGame(_ item: LibraryItem, to dest: Bottle) {
+        guard let appName = item.epicAppName, let path = epicInstalls[appName] else { return }
+        if runningSessions.contains(where: { $0.libraryID == item.id }) {
+            fail(HighballError.failed(String(format: L("%@ is running. Quit it first, then move it."), item.title)))
+            return
+        }
+        runBusy(String(format: L("Moving %@ to '%@'"), item.title, dest.name),
+                done: DoneState(title: String(format: L("%@ now plays in '%@'"), item.title, dest.name), ctaTitle: nil, cta: nil)) { [self] in
+            let store = epicStore
+            let refused = try await Task.detached {
+                try store.move(appName, from: path, into: dest) { line in Task { @MainActor in self.appendLog(line) } }
+            }.value
+            await MainActor.run { self.epicRefresh() }
+            if let refused { throw HighballError.failed(String(format: L("%@ could not move. %@"), item.title, refused)) }
+        }
+    }
+
     func epicSignIn(code: String) {
         runBusy(L("Connecting your Epic account"), stop: .cancelTask(label: L("Stop"))) { [self] in
             let store = epicStore
@@ -3215,6 +3409,10 @@ final class AppState {
             // The variables this game's recipe scoped to it (highball#198), on top of Legendary's.
             let row = gameDB.byEpicAppName[game.app_name]
             let gameEnvironment = bottle.settings.environment(forGame: row?.id)
+            // The row's launch arguments, then the ones the player set on the game's page, after
+            // Legendary's, as for Steam games. Epic games had no way to pass any short of editing
+            // Legendary's config.ini by hand (a player on Discord, 2026-10-26).
+            arguments += (row?.effectiveLaunchArgs() ?? []) + (libraryLaunchArgs["epic:\(game.app_name)"] ?? [])
             watchedLaunch(box) {
                 try await runner.start(executable, arguments: arguments,
                                        renderer: renderer, extraEnvironment: info.environment.merging(gameEnvironment) { _, new in new },

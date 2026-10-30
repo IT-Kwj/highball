@@ -90,6 +90,9 @@ public struct BottleStore: Sendable {
     public func create(name rawName: String, engine: InstalledEngine, renderer: Renderer? = nil, windowsVersion: WindowsVersion = .win10) async throws -> Bottle {
         let name = rawName.trimmingCharacters(in: .whitespaces)
         if let problem = Self.nameProblem(name) { throw HighballError.invalid(problem) }
+        // Wine reaches the engine and the environment through Windows paths, so a folder name
+        // Windows can't hold anywhere above them fails the first boot every time (highball#547).
+        if let problem = HighballPaths.windowsPathProblem(paths.home) { throw HighballError.invalid(problem) }
         try paths.ensure()
         let url = try Self.bottleURL(name, in: paths)
         // lstat, not fileExists: fileExists follows symlinks, so a dangling one sailed through
@@ -110,7 +113,16 @@ public struct BottleStore: Sendable {
         // says ready over an environment that never booted).
         guard result.exitStatus == 0 else {
             try? runner.kill()
+            // The half-made environment is deleted below, so what Wine could and couldn't reach
+            // goes into the log first: the first-boot failures in highball#547 and #446 arrived
+            // as three lines and exit 53 with nothing to tell a damaged engine from a path Wine
+            // can't express. "could not load kernel32.dll" names no file the way import_dll lines
+            // do, so the engine's own builtins are checked here too, and a damaged engine gets
+            // the reinstall that fixes it (#118, #37) instead of a Repair that runs the same step.
+            let missing = EngineIntegrity.gone(fromEngineAt: engine.root, notFound: EngineIntegrity.builtins.sorted(), arch: engine.manifest.arch)
+            Self.appendLines(Self.setupDiagnostics(bottle: url, engine: engine, home: paths.home, missing: missing), to: result.log)
             _ = try? discard(url, name: name)
+            if !missing.isEmpty { throw HighballError.engineDamaged(engine: engine.id, files: missing) }
             throw HighballError.processFailed(command: "wineboot -u", status: result.exitStatus, output: "see \(result.log.path)")
         }
         if Task.isCancelled {
@@ -134,6 +146,38 @@ public struct BottleStore: Sendable {
         try? await runner.setServiceTimeout()
         try? await runner.setKeyboardMapping(commandIsControl: bottle.settings.commandIsControl)
         return bottle
+    }
+
+    /// What a failed first boot leaves in its log before the environment is removed: where the
+    /// prefix's C: and Z: drives point, whether Highball's folder resolves elsewhere, a path Wine
+    /// can't express, the engine's missing builtins, the free space on that volume, and the names
+    /// (never the values) of WINE and DYLD variables the app inherited and passes on to Wine.
+    static func setupDiagnostics(bottle: URL, engine: InstalledEngine, home: URL, missing: [String],
+                                 environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        let fm = FileManager.default
+        func target(_ drive: String) -> String {
+            let link = bottle.appending(path: "dosdevices/\(drive)").path
+            return (try? fm.destinationOfSymbolicLink(atPath: link)) ?? "missing"
+        }
+        var lines = ["# setup failed, what Wine had to work with:",
+                     "# dosdevices c: -> \(target("c:")), z: -> \(target("z:"))"]
+        let resolved = home.resolvingSymlinksInPath().path
+        lines.append(resolved == home.path ? "# home \(home.path)" : "# home \(home.path), resolves to \(resolved)")
+        if let why = HighballPaths.windowsPathProblem(home) { lines.append("# path problem: \(why)") }
+        lines.append("# engine \(engine.id) builtins missing: \(missing.isEmpty ? "none" : missing.joined(separator: ", "))")
+        if let free = (try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage {
+            lines.append("# free on that volume: \(free >> 30) GB")
+        }
+        let inherited = environment.keys.filter { $0.hasPrefix("WINE") || $0.hasPrefix("DYLD") }.sorted()
+        lines.append("# inherited WINE and DYLD variables: \(inherited.isEmpty ? "none" : inherited.joined(separator: ", "))")
+        return lines
+    }
+
+    static func appendLines(_ lines: [String], to log: URL) {
+        guard let handle = try? FileHandle(forWritingTo: log) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data((lines.joined(separator: "\n") + "\n").utf8))
     }
 
     /// True when the prefix's 32-bit half is missing, the state issue #37 users found only when an

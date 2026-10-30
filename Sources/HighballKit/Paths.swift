@@ -78,6 +78,7 @@ public struct HighballPaths: Sendable {
         guard fm.isWritableFile(atPath: url.path) else { return "Highball cannot write in that folder." }
         let target = url.standardizedFileURL.path + "/", base = defaultHome.standardizedFileURL.path + "/"
         if target.hasPrefix(base) || base.hasPrefix(target) { return "Pick a folder outside Highball's own data folder." }
+        if let why = windowsPathProblem(url) { return why }
         if (try? url.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true {
             return "That volume is read only."
         }
@@ -89,6 +90,23 @@ public struct HighballPaths: Sendable {
             return "That drive cannot store a file larger than \(max >> 30) GB, and game files are often bigger. Format it as APFS, or pick another drive."
         }
         return volumeProblem(url)
+    }
+
+    /// Why Wine cannot reach a folder through its Windows paths, or nil. Windows drops a trailing
+    /// period or space from every folder name and refuses <>:"|?* and control characters, and Wine
+    /// does the same when it turns a Mac path into a Windows one. A home folder named "a." became
+    /// Z:\Users\a, which does not exist, so the very first Windows setup failed with "could not load
+    /// kernel32.dll" (exit 53) on every try and Repair repeated it (highball#547, #446). Reproduced
+    /// 2026-10-29 with a folder named "u." on engine r28; the same tree without the period boots.
+    public static func windowsPathProblem(_ url: URL) -> String? {
+        for part in url.standardizedFileURL.pathComponents where part != "/" {
+            let bad = part.hasSuffix(".") || part.hasSuffix(" ")
+                || part.unicodeScalars.contains { "<>:\"|?*".unicodeScalars.contains($0) || $0.value < 0x20 }
+            if bad {
+                return "Wine can't use Highball's folder because the folder \"\(part)\" in its path has a name Windows can't use (it ends with a period or a space, or holds one of <>:\"|?*). In Highball's settings, under Environments, use Change… to keep Highball's data in a folder outside it, such as one in /Users/Shared."
+            }
+        }
+        return nil
     }
 
     /// Why a usable folder is still a poor place for a prefix, or nil. Shown before the move,
@@ -198,6 +216,10 @@ public enum BugReport {
         "winemetal",                // DXMT
         "D3DMetal",
         "wined3d_adapter_create",
+        "gl.renderer:",
+        "gl.version:",
+        "gl.vendor:",
+        "OpenGL renderer",
     ]
 
     /// Kept in the digest for context, but deliberately NOT used to choose a log: every wine
@@ -205,7 +227,7 @@ public enum BugReport {
     /// any log "informative" and collapse selection back to newest-wins.
     static let contextMarkers = ["init_peb starting"]
 
-    static let errorMarkers = ["err:", "[mvk-error]", "Assertion Failed", "Backtrace:"]
+    static let errorMarkers = ["err:", "[mvk-error]", "Assertion Failed", "Backtrace:", "OpenGL error"]
     /// Wine shouts these on every single launch and they have never explained a failure. Left in
     /// the budget they crowd the real errors out: one issue #21 log carries 24 HID lines and 740
     /// identical font-handle lines before anything diagnostic.

@@ -22,6 +22,9 @@ struct LibraryView: View {
     /// that read as a bug (highball#257).
     @AppStorage("library.installedOnly") private var installedOnly = false
     @AppStorage("library.verifiedOnly") private var verifiedOnly = false
+    /// Shows the games the player hid, and only them, so one can be brought back (highball#445).
+    /// Not kept across starts: a library that opened on its hidden games alone would look emptied.
+    @State private var showingHidden = false
     #if DEBUG
     /// HB_DEBUG_GAME="<title>": the first library item whose title contains it opens a few seconds after
     /// launch, so a script can capture game pages without a click (highball#279's page was checked this
@@ -29,8 +32,13 @@ struct LibraryView: View {
     @State private var debugGame: LibraryItem?
     #endif
 
+    /// The library without the games the player hid, or with the Hidden filter on, those alone.
+    private var shown: [LibraryItem] {
+        LibraryIndex.visible(state.libraryItems, hidden: state.hiddenItems, showingHidden: showingHidden)
+    }
+
     private var filtered: [LibraryItem] {
-        state.libraryItems.filter { item in
+        shown.filter { item in
             if let sourceFilter, item.source != sourceFilter { return false }
             if installedOnly && !item.installedAnywhere { return false }
             if verifiedOnly {
@@ -46,8 +54,8 @@ struct LibraryView: View {
     /// piece taken from PR #230). Only once the grid holds more than the row, with a handful of
     /// games and nothing owned besides them the row would repeat every tile.
     private var homeItems: [LibraryItem] {
-        let installed = LibraryIndex.installedForHome(state.libraryItems)
-        guard state.libraryItems.count > 6, state.libraryItems.count > installed.count else { return [] }
+        let installed = LibraryIndex.installedForHome(shown)
+        guard shown.count > 6, shown.count > installed.count else { return [] }
         return installed
     }
 
@@ -58,7 +66,7 @@ struct LibraryView: View {
                 // Installed games first, large, with Play on the cover. The verdict stays under
                 // every cover, the grid below keeps every game, and the row steps aside as soon as
                 // a search or a filter is on.
-                if !homeItems.isEmpty && search.isEmpty && sourceFilter == nil && !installedOnly && !verifiedOnly {
+                if !homeItems.isEmpty && search.isEmpty && sourceFilter == nil && !installedOnly && !verifiedOnly && !showingHidden {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             HB.eyebrow(L("Installed games"))
@@ -123,10 +131,19 @@ struct LibraryView: View {
             FilterChip(label: "Steam", on: sourceFilter == .steam) { sourceFilter = .steam }
             FilterChip(label: "Epic", on: sourceFilter == .epic) { sourceFilter = .epic }
             FilterChip(label: "GOG", on: sourceFilter == .gog) { sourceFilter = .gog }
+            // Only once Battle.net has installed something: most libraries never have a game from it.
+            if sourceFilter == .battlenet || state.libraryItems.contains(where: { $0.source == .battlenet }) {
+                FilterChip(label: "Battle.net", on: sourceFilter == .battlenet) { sourceFilter = .battlenet }
+            }
             FilterChip(label: L("Programs"), on: sourceFilter == .pin) { sourceFilter = .pin }
             Divider().frame(height: 16)
             FilterChip(label: L("Installed"), on: installedOnly) { installedOnly.toggle() }
             FilterChip(label: L("Verified"), on: verifiedOnly) { verifiedOnly.toggle() }
+            // Only once a game in the library is hidden: the chip is the way back to it.
+            if showingHidden || state.libraryItems.contains(where: state.isHidden) {
+                FilterChip(label: L("Hidden"), on: showingHidden) { showingHidden.toggle() }
+                    .help(L("Shows the games you hid. Show in library on a game's menu brings it back."))
+            }
             Spacer()
         }
     }
@@ -396,6 +413,13 @@ struct LibraryTile: View {
             if NameStore.name(for: item.id, in: state.customNames) != nil {
                 Button(L("Reset name")) { state.resetName(for: item) }
             }
+            // Out of the library without touching the game (highball#445); the Hidden filter
+            // lists it again.
+            if state.isHidden(item) {
+                Button(L("Show in library")) { state.setHidden(false, for: item) }
+            } else {
+                Button(L("Hide from library")) { state.setHidden(true, for: item) }
+            }
             // A program someone added by hand leaves the library from its tile, not only from
             // the environment's programs list (highball-db#68). Steam and Epic entries follow
             // their stores' libraries, so they have no such button.
@@ -437,7 +461,7 @@ struct SourceBadge: View {
     /// whole badge lit when Steam for Mac has it installed.
     var mac: MacSteamBuild? = nil
     private var label: String {
-        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .gog: "GOG"; case .pin: "EXE" }
+        switch source { case .steam: "STEAM"; case .epic: "EPIC"; case .gog: "GOG"; case .pin: "EXE"; case .battlenet: "BATTLE.NET" }
     }
     private var lit: Bool { mac == .installed }
     var body: some View {

@@ -33,9 +33,19 @@ fi
 # shadowed memory back to the game's pages when a submission completes, so a 32-bit game's readbacks stop being
 # stale; MVK_PATCHES="shadow-import shadow-readback" built moltenvk-1.4.1-shadow-import-1-shadow-readback-1, published
 # in the engine-components release and not yet referenced by any engine manifest.
-# device-memory-cap (2026-10-27, highball#398) goes last: HB_MVK_DEVICE_MEMORY_PERCENT caps the device-local heap
+# device-memory-cap (2026-10-27, highball#398) comes next: HB_MVK_DEVICE_MEMORY_PERCENT caps the device-local heap
 # and its budget at that share of the Mac's memory, so a game that sizes its streaming from them stops growing
-# into swap. Inert unless the variable is set. The .github/workflows/build-moltenvk.yml job runs this script.
+# into swap. Inert unless the variable is set.
+# cache-drawid-present and lenient-interfaces (2026-10-29, highball#125) go last, ported from DiAvisoo's
+# MoltenVK-Detroit (alexdremov's and squidbus's work in KhronosGroup/MoltenVK#2054) for Detroit: Become Human.
+# cache-drawid-present fixes three bugs any game can hit, so it is always on: vkGetPipelineCacheData() wrote
+# nothing when the cache size was not known yet, the draw ID of a direct draw was written at the wrong place, and
+# a finished present read its swapchain after letting go of the image. lenient-interfaces is inert unless
+# HB_MVK_LENIENT_INTERFACES=1: then a vertex attribute the pipeline does not describe gets a placeholder, and a
+# color attachment whose float or integer kind differs from the fragment output takes the output's kind. Both
+# apply on bare 1.4.2 too. The Wine 11 set, in order: shadow-import linear-fallback shadow-readback
+# device-memory-cap cache-drawid-present lenient-interfaces. The .github/workflows/build-moltenvk.yml job runs
+# this script with that set.
 read -r -a PATCH_NAMES <<< "${MVK_PATCHES:-shadow-import linear-fallback}"
 for NAME_ in "${PATCH_NAMES[@]}"; do
   PATCH="$PATCHES/moltenvk-$NAME_.patch"

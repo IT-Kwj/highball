@@ -238,6 +238,40 @@ public struct EpicStore: Sendable {
         return Int64(value * 1_048_576)
     }
 
+    static func moveArguments(appName: String, basePath: String) -> [String] { ["move", appName, basePath] }
+
+    /// Moves an installed game's folder into another environment's drive_c/Games and rewrites
+    /// legendary's record of it, so the game alone plays there (highball#566: the engine switch
+    /// moves every game of an environment). Legendary renames the folder, which takes a moment
+    /// whatever the game's size, and it refuses another disk. It prints its refusals and still
+    /// exits 0, so the files decide: nil when the folder now sits in the new place, else why not.
+    public func move(_ appName: String, from installPath: String, into bottle: Bottle,
+                     onLine: (@Sendable (String) -> Void)? = nil) throws -> String? {
+        let base = bottle.driveC.appending(path: "Games", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let refusals = Collector()
+        _ = try runStreaming(Self.moveArguments(appName: appName, basePath: base.path)) { line in
+            if let r = line.range(of: "ERROR: ") { refusals.append(String(line[r.upperBound...])) }
+            onLine?(line)
+        }
+        let moved = base.appending(path: URL(fileURLWithPath: installPath).lastPathComponent).path
+        if FileManager.default.fileExists(atPath: moved), !FileManager.default.fileExists(atPath: installPath) { return nil }
+        return refusals.lines.last.map(Self.moveFailure) ?? "Its folder is still at \(installPath)."
+    }
+
+    /// Legendary's refusal to move, as a sentence for the player.
+    static func moveFailure(_ message: String) -> String {
+        if message.hasPrefix("Moving to a different drive is not supported") {
+            return "The game is on another disk than that environment, and Epic's tool only moves a game within one disk."
+        }
+        // 0.21.0 renames straight onto the target: an empty folder there is replaced, a full one
+        // fails with errno 66 (measured 2026-10-30). Its own check for that case reads this way.
+        if message.contains("Directory not empty") || message.hasPrefix("The target path already contains a folder called") {
+            return "That environment already has a folder of that name in drive_c/Games. Remove or rename it, then try again."
+        }
+        return message
+    }
+
     static func uninstallArguments(appName: String) -> [String] { ["uninstall", appName, "-y"] }
 
     /// Removes a game legendary installed. Legendary owns the Epic install state, so it does the

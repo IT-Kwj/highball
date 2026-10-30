@@ -7,7 +7,7 @@ struct Highball: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "highball",
         abstract: "Highball — run Windows games on Apple Silicon. Free, open, engine-agnostic.",
-        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, GOG.self, Report.self, BugReportCommand.self, Verify.self],
+        subcommands: [Config.self, Engine.self, Bottle.self, Run.self, LibraryCommand.self, Play.self, QuitCommand.self, PinCommand.self, Recipe.self, Tricks.self, Env.self, Epic.self, GOG.self, Report.self, BugReportCommand.self, Verify.self],
         defaultSubcommand: nil
     )
 }
@@ -883,6 +883,165 @@ struct GOG: AsyncParsableCommand {
             case .failed(let why): return "failed (\(why))"
             }
         }
+    }
+}
+
+// MARK: - highball library / play (highball#432)
+
+/// The library as the app builds it, read from disk: the environments' Steam games, installed and
+/// owned, Steam for Mac's installs, Battle.net's installs, the GOG games in the environments, the
+/// programs added by hand, and with `epic` the Epic account's games, which asks legendary, and the
+/// GOG games' names and covers, which may ask GOG's database. Not-installed games are homed as the app homes them (AppState's
+/// defaultBottle: the Games environment, else the first with Steam, else the first).
+func currentLibrary(paths: HighballPaths, epic: Bool) -> [LibraryItem] {
+    let bottles = (try? BottleStore(paths: paths).list()) ?? []
+    let steam = Dictionary(bottles.map { ($0.name, SteamLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
+    let owned = Dictionary(bottles.map { ($0.name, SteamOwnedLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
+    var epicOwned: [EpicStore.Game] = [], epicInstalls: [String: String] = [:]
+    let store = EpicStore(paths: paths)
+    if epic, store.isAuthenticated {
+        epicOwned = (try? store.ownedGames()) ?? []
+        epicInstalls = EpicStore.installMap((try? store.installedGames()) ?? [])
+    }
+    let hasSteam = { (b: HighballKit.Bottle) in
+        FileManager.default.fileExists(atPath: b.driveC.appending(path: "Program Files (x86)/Steam/steam.exe").path)
+    }
+    let home = bottles.first { $0.name == "Games" } ?? bottles.first(where: hasSteam) ?? bottles.first
+    let battleNet = Dictionary(bottles.map { ($0.name, BattleNetLibrary.games(in: $0)) }, uniquingKeysWith: { a, _ in a })
+    // GOG as the app reads it: installs from disk, and the launch choices that decide which
+    // programs added by hand its tiles stand for, so both list the same ids.
+    let gogStore = GOGStore(paths: paths)
+    let gogInstalled = Dictionary(bottles.map { ($0.name, GOGStore.installedGames(driveC: $0.driveC)) }, uniquingKeysWith: { a, _ in a })
+    let gogGames = epic ? Set(gogInstalled.values.joined().map(\.id)).sorted().compactMap { gogStore.game($0) } : []
+    return LibraryIndex.build(bottles: bottles, steamByBottle: steam, steamOwnedByBottle: owned,
+                              macInstalled: MacSteam.installedGames(), epicOwned: epicOwned, epicInstalls: epicInstalls,
+                              gogGames: gogGames, gogInstalledByBottle: gogInstalled,
+                              gogLaunchChoice: GOGSettings.load(gogStore).launchChoice,
+                              battleNetByBottle: battleNet,
+                              plays: LibraryStore(paths: paths).load(), defaultBottle: home?.name,
+                              pinExists: { b, pin in FileManager.default.fileExists(atPath: pin.executableURL(driveC: b.driveC).path) })
+}
+
+/// Everything Highball started, ended in one go: what a frontend runs when it closes (highball#432),
+/// since it knows games by id and has no idea which environment holds which. Every environment
+/// with a live Wine server is stopped the way Stop all processes does it, then the app is asked
+/// to quit, as Quit in its menu would. Nothing outside Highball's environments is touched.
+struct QuitCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "quit",
+        abstract: "Stop every program running in Highball's environments, Steam included, and quit Highball.",
+        discussion: "For frontends such as ES-DE on exit. --keep-app leaves the Highball app open.")
+    @Flag(help: "Stop the environments but leave the Highball app running.") var keepApp = false
+
+    func run() async throws {
+        let paths = HighballPaths()
+        let engines = EngineStore(paths: paths)
+        for b in (try? BottleStore(paths: paths).list()) ?? [] where ProcessTable.liveServer(forPrefix: b.url) != nil {
+            guard let eng = try? engines.engine(b.settings.engineID) else { continue }
+            _ = try? WineRunner(paths: paths, engine: eng, bottle: b).kill()
+            print("stopped \(b.name)")
+        }
+        guard !keepApp else { return }
+        let quit = Process()
+        quit.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        quit.arguments = ["-e", "if application id \"app.highball.Highball\" is running then tell application id \"app.highball.Highball\" to quit"]
+        try? quit.run()
+        quit.waitUntilExit()
+    }
+}
+
+struct LibraryCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "library",
+        abstract: "List the library's games with the ids `highball play` takes.",
+        discussion: "One game per line, tab-separated: id, name, environment, and installed, installed on Mac or not installed.")
+    @Flag(help: "Only the games that can be played now.") var installed = false
+    @Flag(help: "Print JSON instead of lines.") var json = false
+
+    func run() async throws {
+        let paths = HighballPaths()
+        let names = NameStore(paths: paths).names()
+        let entries = currentLibrary(paths: paths, epic: true)
+            .filter { !installed || $0.installedAnywhere }
+            .map { LibraryListing.entry($0, title: NameStore.name(for: $0.id, in: names) ?? $0.title) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        if json {
+            let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            print(String(decoding: try enc.encode(entries), as: UTF8.self))
+        } else {
+            for entry in entries { print(LibraryListing.line(entry)) }
+        }
+    }
+}
+
+struct Play: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Start a library game through the Highball app, as its Play button does.",
+        discussion: """
+            The id is one `highball library` lists: steam:<appid>, epic:<app name>, gog:<product id>, \
+            pin:<environment>:<uuid> or battlenet:<product code>, and launcher:<id> opens a launcher. Highball starts it with \
+            the game's own settings and stays in the background, the way a game's Mac app does. \
+            With --wait the command returns once the game has quit, for frontends such as ES-DE, \
+            and Highball and Steam keep running. It follows the games Highball runs in its \
+            environments, so a game Steam for Mac starts ends the wait only at --start-timeout.
+            """)
+    @Argument(help: "The game's library id.") var id: String
+    @Flag(help: "Return only once the game has quit.") var wait = false
+    @Option(help: "With --wait, how many seconds the game has to start before the command gives up.") var startTimeout: Int = 600
+
+    func run() async throws {
+        guard let target = PlayLink.Target(libraryID: id) else {
+            fail("\(id) is not a library id. `highball library` lists them: steam:<appid>, epic:<app name>, gog:<product id>, pin:<environment>:<uuid>, battlenet:<product code>.")
+        }
+        let paths = HighballPaths()
+        // A typo fails here and now, not as an alert in the app and a wait that never ends.
+        switch target {
+        case .launcher:
+            break
+        case let .epic(name):
+            let store = EpicStore(paths: paths)
+            guard store.isAuthenticated, EpicStore.installMap((try? store.installedGames()) ?? [])[name] != nil else {
+                fail("\(id) is not an installed Epic game in this Highball. `highball library --installed` lists what can be played.")
+            }
+        case .steam, .gog, .pin, .battlenet:
+            guard currentLibrary(paths: paths, epic: false).contains(where: { $0.id == target.libraryID }) else {
+                fail("\(id) is not in this Highball's library. `highball library` lists the ids.")
+            }
+        }
+        // The link the game's Mac app opens, with this install's token, so the app starts it
+        // without asking; -g keeps Highball behind the game (MacAppStub.launchScript).
+        let url = PlayLink.url(for: target, token: PlayLink.token(in: paths))
+        let open = Process()
+        open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        open.arguments = ["-g"] + (enclosingApp().map { ["-a", $0.path] } ?? []) + [url.absoluteString]
+        try open.run()
+        open.waitUntilExit()
+        guard open.terminationStatus == 0 else { fail("macOS could not open the Highball app (open exited with \(open.terminationStatus))") }
+        guard wait else { return }
+        if case .launcher = target { return }   // a launcher is not a game the app follows
+
+        let started = Date()
+        var phase = PlayWait.Phase.starting
+        while true {
+            try await Task.sleep(for: .seconds(2))
+            switch PlayWait.step(phase, id: target.libraryID, running: RunningGames.current(paths: paths),
+                                 waited: Date().timeIntervalSince(started), startTimeout: TimeInterval(startTimeout)) {
+            case .keepWaiting(let next): phase = next
+            case .ended: return
+            case .neverStarted: fail("\(id) did not start within \(startTimeout) s. Highball may be asking something in its window.")
+            }
+        }
+    }
+
+    /// The Highball app this command ships in, so it starts games in that app and not in another
+    /// copy macOS knows; nil for a build from source, which uses the app registered for highball://.
+    private func enclosingApp() -> URL? {
+        var url = Bundle.main.executableURL?.resolvingSymlinksInPath()
+        while let current = url, current.path != "/" {
+            if current.pathExtension == "app" { return current }
+            url = current.deletingLastPathComponent()
+        }
+        return nil
     }
 }
 

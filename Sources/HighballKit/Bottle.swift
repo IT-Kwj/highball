@@ -902,8 +902,11 @@ public struct Bottle: Sendable {
         // #187). An engine that ships libhbaudiobuf.dylib gets it inserted into Wine's processes,
         // where it caps the audio unit's buffer at 5 ms. Since 20261008 it also limits a float mix
         // that goes over full scale, as the last stage of Windows' audio engine does, where the Mac
-        // would clip it (Paperback, highball-db#349). HB_AUDIOBUF=0 in an environment's variables
-        // leaves the library out, HB_AUDIOLIMIT=0 keeps it without the limiter.
+        // would clip it (Paperback, highball-db#349). Builds after 20261008 cap microphones the same
+        // way, where Wine dropped 32 frames a period (highball#350), and run Wine's per-stream audio
+        // clock in real time, which a busy Mac otherwise woke late (highball#444). HB_AUDIOBUF=0 in
+        // an environment's variables leaves the library out, HB_AUDIOLIMIT=0 keeps it without the
+        // limiter, HB_AUDIORT=0 without the real-time clock.
         if let lib = engine.audioBufferLibrary, env["HB_AUDIOBUF"] != "0" {
             let inserted = (env["DYLD_INSERT_LIBRARIES"] ?? "").split(separator: ":").map(String.init)
             env["DYLD_INSERT_LIBRARIES"] = ([lib.path] + inserted.filter { $0 != lib.path }).joined(separator: ":")

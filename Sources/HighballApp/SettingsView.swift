@@ -293,6 +293,17 @@ struct EnginePane: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Only where it means something: a Mac with Steam for Mac, or one where it was turned off.
+            if state.steamForMacInstalled || !state.includeMacSteam {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(L("Show games from Steam for Mac"), isOn: Binding(get: { state.includeMacSteam },
+                                                                                 set: { state.setIncludeMacSteam($0) }))
+                        Text(L("Games Steam for Mac installed are listed next to your Windows games, and Play opens their Mac version. Off, the library lists only what Highball's environments hold, and Play uses the Windows version."))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             if let update = state.engineUpdate {
                 GroupBox {
                     HStack {

@@ -7,7 +7,7 @@ import ImageIO
 // section; the bottle is a per-game property, never the navigation.
 
 public enum LibrarySource: String, Sendable, Codable {
-    case steam, epic, gog, pin
+    case steam, epic, gog, pin, battlenet
 }
 
 /// A playable item in the unified library. Pure value: no Bottle, no GameDBEntry — the app
@@ -16,7 +16,7 @@ public enum LibrarySource: String, Sendable, Codable {
 public struct LibraryItem: Identifiable, Sendable, Hashable {
     public let source: LibrarySource
     /// Stable identity, also the persistence key in library.json — never change its shape:
-    /// "steam:<appid>" | "epic:<app_name>" | "gog:<product id>" | "pin:<bottle>:<uuid>".
+    /// "steam:<appid>" | "epic:<app_name>" | "gog:<product id>" | "pin:<bottle>:<uuid>" | "battlenet:<product code>".
     public let id: String
     public let title: String
     /// Where it lives. nil only for an Epic or GOG title owned but not installed in any bottle.
@@ -31,6 +31,8 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
     /// The Steam app id GOG's database gives the same game: the compatibility database is matched
     /// by it, never Steam itself (`steamAppID` stays nil, so nothing treats the copy as a Steam one).
     public let gogSteamAppID: Int?
+    /// Blizzard's product code for a game Battle.net installed (BattleNetGame.productCode).
+    public let battleNetProduct: String?
     public let pinID: UUID?
     public let artworkTall: URL?
     public let artworkWide: URL?
@@ -41,12 +43,13 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
 
     public init(source: LibrarySource, id: String, title: String, bottleName: String?,
                 installed: Bool, installedOnMac: Bool = false, steamAppID: Int? = nil, epicAppName: String? = nil,
-                gogID: String? = nil, gogSteamAppID: Int? = nil, pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
+                gogID: String? = nil, gogSteamAppID: Int? = nil, battleNetProduct: String? = nil,
+                pinID: UUID? = nil, artworkTall: URL? = nil, artworkWide: URL? = nil,
                 otherBottles: [String] = [], sizeOnDisk: Int64 = 0, lastPlayed: Date? = nil) {
         self.source = source; self.id = id; self.title = title; self.bottleName = bottleName
         self.installed = installed; self.installedOnMac = installedOnMac
         self.steamAppID = steamAppID; self.epicAppName = epicAppName
-        self.gogID = gogID; self.gogSteamAppID = gogSteamAppID
+        self.gogID = gogID; self.gogSteamAppID = gogSteamAppID; self.battleNetProduct = battleNetProduct
         self.pinID = pinID; self.artworkTall = artworkTall; self.artworkWide = artworkWide
         self.otherBottles = otherBottles; self.sizeOnDisk = sizeOnDisk; self.lastPlayed = lastPlayed
     }
@@ -64,7 +67,8 @@ public struct LibraryItem: Identifiable, Sendable, Hashable {
         let others = (otherBottles.filter { $0 != bottle } + (installed ? [bottleName].compactMap { $0 } : [])).sorted()
         return LibraryItem(source: source, id: id, title: title, bottleName: bottle, installed: holds,
                            installedOnMac: installedOnMac, steamAppID: steamAppID, epicAppName: epicAppName,
-                           gogID: gogID, gogSteamAppID: gogSteamAppID, pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
+                           gogID: gogID, gogSteamAppID: gogSteamAppID, battleNetProduct: battleNetProduct,
+                           pinID: pinID, artworkTall: artworkTall, artworkWide: artworkWide,
                            otherBottles: others, sizeOnDisk: holds ? 0 : sizeOnDisk, lastPlayed: lastPlayed)
     }
 }
@@ -83,6 +87,13 @@ public enum LibraryIndex {
             default: return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
             }
         }
+    }
+
+    /// What the library shows (highball#445): a hidden game stays out of the grid and the Home row,
+    /// and the Hidden filter shows the hidden ones alone, so each can be brought back.
+    public static func visible(_ items: [LibraryItem], hidden: Set<String>, showingHidden: Bool) -> [LibraryItem] {
+        guard !hidden.isEmpty || showingHidden else { return items }
+        return items.filter { LibraryStore.isHidden($0.id, in: hidden) == showingHidden }
     }
 
     /// Launcher pins are infrastructure, not games — they never appear in the library, and
@@ -226,7 +237,8 @@ public enum LibraryIndex {
     /// `steamOwnedByBottle` adds the account's games that aren't installed anywhere
     /// (SteamOwnedLibrary, highball#199), homed in the first bottle whose Steam owns them.
     /// `macInstalled` is what Steam for Mac has installed (MacSteam): those games count as
-    /// installed, and one no bottle knows gets a tile of its own.
+    /// installed, and one no bottle knows gets a tile of its own. `battleNetByBottle` is what
+    /// Battle.net installed in each bottle (BattleNetLibrary, highball#417).
     public static func build(bottles: [Bottle],
                              steamByBottle: [String: [SteamGame]],
                              steamOwnedByBottle: [String: [OwnedSteamGame]] = [:],
@@ -236,6 +248,7 @@ public enum LibraryIndex {
                              gogGames: [GOGStore.Game] = [],
                              gogInstalledByBottle: [String: [GOGStore.InstalledGame]] = [:],
                              gogLaunchChoice: [String: Int] = [:],
+                             battleNetByBottle: [String: [BattleNetGame]] = [:],
                              plays: [String: LibraryStore.PlayRecord] = [:],
                              defaultBottle: String? = nil,
                              pinExists: (Bottle, Pin) -> Bool = { _, _ in true }) -> [LibraryItem] {
@@ -350,6 +363,27 @@ public enum LibraryIndex {
                 lastPlayed: ([itemID] + standing.filter { $0.gogItemID == itemID }.map(\.pinItemID)).compactMap { plays[$0]?.lastPlayedAt }.max()))
         }
 
+        // Battle.net: one tile per game like Steam's, homed where it was last played, then in the
+        // default environment, then by name; the other environments holding it are remembered.
+        var byProduct: [String: [(bottle: String, game: BattleNetGame)]] = [:]
+        for bottle in bottles {
+            for game in battleNetByBottle[bottle.name] ?? [] { byProduct[game.productCode, default: []].append((bottle.name, game)) }
+        }
+        for (code, copies) in byProduct {
+            let id = "battlenet:\(code)"
+            let lastPlayedBottle = plays[id]?.bottle
+            let primary = copies.min { a, b in
+                if let lp = lastPlayedBottle, (a.bottle == lp) != (b.bottle == lp) { return a.bottle == lp }
+                return before(a.bottle, b.bottle)
+            }!
+            items.append(LibraryItem(
+                source: .battlenet, id: id, title: primary.game.title, bottleName: primary.bottle,
+                installed: true, battleNetProduct: code, artworkTall: primary.game.boxArt,
+                otherBottles: copies.map(\.bottle).filter { $0 != primary.bottle }.sorted(),
+                sizeOnDisk: primary.game.sizeOnDisk,
+                lastPlayed: [primary.game.lastPlayed, plays[id]?.lastPlayedAt].compactMap { $0 }.max()))
+        }
+
         // Custom pins (dropped exes, preinstalled games), no artwork. Installed when the program's
         // file is there: one on a drive that is unplugged, or deleted since, is not (highball#269,
         // the Installed filter kept listing them). `pinExists` is the app's check of the disk;
@@ -377,6 +411,34 @@ public enum LibraryIndex {
         let others = items.filter { $0.source != .steam && $0.bottleName == bottle && $0.installed }
         return (steam.count + others.count,
                 steam.reduce(Int64(0)) { $0 + $1.sizeOnDisk } + others.reduce(Int64(0)) { $0 + $1.sizeOnDisk })
+    }
+}
+
+/// The library as `highball library` prints it (highball#432): a game per line, led by the id
+/// `highball play` takes, then the name the player sees, its environment and whether it can be
+/// played. Tab-separated so a frontend's script can cut it; `--json` gives the same entries.
+public enum LibraryListing {
+    public struct Entry: Codable, Equatable, Sendable {
+        public let id: String
+        public let title: String
+        public let source: String
+        public let environment: String?
+        public let installed: Bool
+        public let installedOnMac: Bool
+    }
+
+    /// `title` is the name shown in the app: a custom one (NameStore) or the store's.
+    public static func entry(_ item: LibraryItem, title: String) -> Entry {
+        Entry(id: item.id, title: title, source: item.source.rawValue, environment: item.bottleName,
+              installed: item.installed, installedOnMac: item.installedOnMac)
+    }
+
+    public static func line(_ entry: Entry) -> String {
+        func field(_ text: String) -> String {
+            text.replacingOccurrences(of: "[\t\r\n]+", with: " ", options: .regularExpression)
+        }
+        let state = entry.installed ? "installed" : entry.installedOnMac ? "installed on Mac" : "not installed"
+        return [entry.id, field(entry.title), field(entry.environment ?? "-"), state].joined(separator: "\t")
     }
 }
 
@@ -431,6 +493,12 @@ public struct LibraryStore: Sendable {
         /// The display one game's window is moved to after it opens, by library id (display UUID
         /// string). Optional so older files still decode.
         var displays: [String: String]?
+        /// Games the player hid from the library, by library id (highball#445: native Mac games,
+        /// demos and finished ones crowded the Windows games). Optional so older files still decode.
+        var hidden: [String]?
+        /// True when Steam for Mac's own installs stay out of the library (highball#445). Absent
+        /// means they are in, as before.
+        var macSteamExcluded: Bool?
     }
 
     public let paths: HighballPaths
@@ -481,6 +549,47 @@ public struct LibraryStore: Sendable {
         if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
     }
 
+    public func hiddenIDs() -> Set<String> { Set(loadShape().hidden ?? []) }
+
+    /// Hides one game from the library, or shows it again. A program's id carries its environment's
+    /// name, so showing it again also drops a mark kept under an earlier name of that environment
+    /// (PinID), or the game would stay hidden after a rename.
+    public func setHidden(_ hidden: Bool, for id: String) {
+        var shape = loadShape()
+        var all = Set(shape.hidden ?? [])
+        if hidden {
+            all.insert(id)
+        } else {
+            all.remove(id)
+            if let uuid = PinID.uuid(in: id) { all = all.filter { !($0.hasPrefix("pin:") && $0.hasSuffix(":" + uuid)) } }
+        }
+        shape.hidden = all.isEmpty ? nil : all.sorted()
+        save(shape)
+    }
+
+    /// Whether an id is hidden in a loaded set: the id itself, or for a program the mark kept under
+    /// an earlier name of its environment (PinID).
+    public static func isHidden(_ id: String, in hidden: Set<String>) -> Bool {
+        if hidden.contains(id) { return true }
+        guard let uuid = PinID.uuid(in: id) else { return false }
+        return hidden.contains { $0.hasPrefix("pin:") && $0.hasSuffix(":" + uuid) }
+    }
+
+    /// Whether the games Steam for Mac installed are part of the library. On unless the player
+    /// turned it off (highball#445).
+    public var includesMacSteam: Bool { loadShape().macSteamExcluded != true }
+
+    public func setIncludesMacSteam(_ on: Bool) {
+        var shape = loadShape()
+        shape.macSteamExcluded = on ? nil : true
+        save(shape)
+    }
+
+    private func save(_ shape: FileShape) {
+        try? paths.ensure()
+        if let data = try? JSONEncoder.highball.encode(shape) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
     private func loadShape() -> FileShape {
         guard let data = try? Data(contentsOf: fileURL),
               let shape = try? JSONDecoder.highball.decode(FileShape.self, from: data) else { return FileShape() }
@@ -503,14 +612,17 @@ public struct LibraryStore: Sendable {
         let keptOverrides = (whole.overrides ?? [:]).filter { validIDs.contains($0.key) }
         let keptArgs = (whole.launchArgs ?? [:]).filter { validIDs.contains($0.key) }
         let keptDisplays = (whole.displays ?? [:]).filter { validIDs.contains($0.key) }
+        let keptHidden = (whole.hidden ?? []).filter { validIDs.contains($0) }
         guard keptItems.count != whole.items.count
                 || keptOverrides.count != (whole.overrides ?? [:]).count
                 || keptArgs.count != (whole.launchArgs ?? [:]).count
-                || keptDisplays.count != (whole.displays ?? [:]).count else { return }
+                || keptDisplays.count != (whole.displays ?? [:]).count
+                || keptHidden.count != (whole.hidden ?? []).count else { return }
         whole.items = keptItems
         whole.overrides = keptOverrides.isEmpty ? nil : keptOverrides
         whole.launchArgs = keptArgs.isEmpty ? nil : keptArgs
         whole.displays = keptDisplays.isEmpty ? nil : keptDisplays
+        whole.hidden = keptHidden.isEmpty ? nil : keptHidden
         if let data = try? JSONEncoder.highball.encode(whole) {
             try? data.write(to: fileURL, options: .atomic)
         }

@@ -42,6 +42,14 @@ struct HighballApp: App {
                         .keyboardShortcut("s", modifiers: [.command, .shift])
                         .disabled(state.busy)
                 }
+                if !state.otherSteamBottles.isEmpty {
+                    Menu(L("Steam in another environment")) {
+                        ForEach(state.otherSteamBottles, id: \.name) { b in
+                            Button(b.name) { state.showSteam(in: b) }
+                        }
+                    }
+                    .disabled(state.busy)
+                }
                 Button(L("A Windows program I have…")) { state.chooseProgramToRun() }
                     .keyboardShortcut("o")
                     .disabled(state.busy || state.bottles.isEmpty)
@@ -100,7 +108,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let delegate = UpdaterDelegate()
         updaterDelegate = delegate
-        updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: nil)
+        #if DEBUG
+        // A dev build is 0.0.0-dev, so any check would offer to replace it with the latest release.
+        let startUpdater = false
+        #else
+        let startUpdater = true
+        #endif
+        updaterController = SPUStandardUpdaterController(startingUpdater: startUpdater, updaterDelegate: delegate, userDriverDelegate: nil)
         super.init()
     }
     /// Set from the App's onAppear so quit-time can reach the bottles.
@@ -343,9 +357,24 @@ struct ContentView: View {
                         ToolbarItemGroup(placement: .primaryAction) {
                             if !showAddGames {
                                 if let bottle = state.defaultSteamBottle {
-                                    Button(state.steamLauncherTitle(in: bottle)) { state.showSteam(in: bottle) }
+                                    if state.otherSteamBottles.isEmpty {
+                                        Button(state.steamLauncherTitle(in: bottle)) { state.showSteam(in: bottle) }
+                                            .disabled(state.busy)
+                                            .help(state.steamLauncherTitle(in: bottle))
+                                    } else {
+                                        // A click opens the default environment's Steam as before, the arrow lists the others.
+                                        Menu {
+                                            ForEach(state.otherSteamBottles, id: \.name) { b in
+                                                Button(b.name) { state.showSteam(in: b) }
+                                            }
+                                        } label: {
+                                            Text(state.steamLauncherTitle(in: bottle))
+                                        } primaryAction: {
+                                            state.showSteam(in: bottle)
+                                        }
                                         .disabled(state.busy)
-                                        .help(state.steamLauncherTitle(in: bottle))
+                                        .help(String(format: L("%@ in '%@'. The arrow opens Steam in another environment."), state.steamLauncherTitle(in: bottle), bottle.name))
+                                    }
                                 }
                                 Button { showAddGames = true } label: {
                                     Label(L("Add games"), systemImage: "plus")

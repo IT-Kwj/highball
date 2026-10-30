@@ -192,12 +192,25 @@ struct GameDetailView: View {
 
     private var libraryInfo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            row(L("Source"), item.source == .steam ? "Steam" : item.source == .epic ? "Epic Games" : item.source == .gog ? "GOG" : L("Windows program"))
+            row(L("Source"), item.source == .steam ? "Steam" : item.source == .epic ? "Epic Games"
+                : item.source == .gog ? "GOG" : item.source == .battlenet ? "Battle.net" : L("Windows program"))
             if item.sizeOnDisk > 0 {
                 row(L("Size on disk"), ByteCountFormatter.string(fromByteCount: item.sizeOnDisk, countStyle: .file))
             }
             if let played = item.lastPlayed {
                 row(L("Last played"), played.formatted(date: .abbreviated, time: .shortened))
+            }
+            // Hiding keeps the game and its settings, it only leaves the library's grid and the
+            // installed row (highball#445).
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(L("Library")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
+                if state.isHidden(item) {
+                    Text(L("Hidden")).font(.callout)
+                    Button(L("Show in library")) { state.setHidden(false, for: item) }.controlSize(.small)
+                } else {
+                    Button(L("Hide from library")) { state.setHidden(true, for: item) }.controlSize(.small)
+                        .help(L("Takes the game out of the library without touching it. The Hidden filter lists it again."))
+                }
             }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
@@ -550,7 +563,7 @@ struct GameDetailView: View {
                                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        if item.source == .steam || item.source == .gog {
+                        if item.source == .steam || item.source == .epic || item.source == .gog {
                             HStack(alignment: .top, spacing: 12) {
                                 Text(L("Launch arguments")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)
                                 VStack(alignment: .leading, spacing: 4) {
@@ -586,7 +599,7 @@ struct GameDetailView: View {
                                             state.engineTransition = AppState.EngineTransition(bottleName: bottle.name, targetID: newID)
                                         })) {
                                         ForEach(offered, id: \.id) { e in
-                                            Text(verbatim: e.missing ? "\(e.id) (\(L("missing")))" : e.installed ? e.id : "\(e.id) (\(L("download")))").tag(e.id)
+                                            Text(verbatim: e.missing ? "\(e.label) (\(L("missing")))" : e.installed ? e.label : "\(e.label) (\(L("download")))").tag(e.id)
                                         }
                                     }.labelsHidden().frame(maxWidth: 360).disabled(state.busy)
                                 } else {
@@ -617,6 +630,17 @@ struct GameDetailView: View {
                             Text(L("Environment")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
                             Text(bottle.name).font(.callout)
                             NavigationLink(L("Environment settings…"), value: EnvironmentSettingsDestination(name: bottle.name)).controlSize(.small)
+                            // An Epic game lives where its folder is, so it can move alone, where the
+                            // engine switch moves every game of the environment (highball#566).
+                            if item.source == .epic, item.installed, state.bottles.count > 1 {
+                                Menu(L("Move to…")) {
+                                    ForEach(state.bottles.filter { $0.name != bottle.name }, id: \.name) { other in
+                                        Button(other.name) { state.moveEpicGame(item, to: other) }
+                                    }
+                                }
+                                .controlSize(.small).fixedSize().disabled(state.busy || running != nil)
+                                .help(L("Moves this game's folder into another environment, where it plays with that environment's engine and settings. Its other games stay where they are. Saves the game keeps in the environment's user folders stay behind, unless Epic keeps them in the cloud."))
+                            }
                         }
                         // Another copy plays from its own environment; once played there, the
                         // tile follows it (highball#264).

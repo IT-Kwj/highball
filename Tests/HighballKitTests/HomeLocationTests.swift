@@ -43,6 +43,54 @@ final class HomeLocationTests: XCTestCase {
         XCTAssertNil(HighballPaths.locationWarning(good), "a local folder is not a share warning")
     }
 
+    // Windows drops a trailing period or space from folder names, and Wine with it: a home folder
+    // named "a." became Z:\\Users\\a and the first setup failed with kernel32.dll on every try
+    // (highball#547). Such a path is refused before anything boots, and as a chosen location.
+    func testWindowsPathProblem() throws {
+        XCTAssertNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a/Library/Application Support/Highball")))
+        XCTAssertNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a.b/.hidden/Highball")), "a period inside or in front is fine")
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Users/a./Library/Application Support/Highball")))
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/Volumes/Games /Highball")), "a trailing space is dropped too")
+        XCTAssertNotNil(HighballPaths.windowsPathProblem(URL(fileURLWithPath: "/tmp/Hi?ball")))
+        let dotted = tmp.appending(path: "x.", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dotted, withIntermediateDirectories: true)
+        XCTAssertNotNil(HighballPaths.locationProblem(dotted, defaultHome: tmp.appending(path: "default")))
+    }
+
+    func testCreateRefusesAHomeWindowsCannotReach() async throws {
+        let paths = HighballPaths(home: tmp.appending(path: "u./Highball", directoryHint: .isDirectory))
+        let json = #"{"id":"x64-a-r1","displayName":"e","arch":"x86_64","minMacOS":"14.0","components":{}}"#
+        let engine = InstalledEngine(manifest: try JSONDecoder().decode(EngineManifest.self, from: Data(json.utf8)),
+                                     root: tmp.appending(path: "engine"))
+        do {
+            _ = try await BottleStore(paths: paths).create(name: "Games", engine: engine)
+            XCTFail("create must refuse before booting anything")
+        } catch let HighballError.invalid(why) {
+            XCTAssertTrue(why.contains("u."), why)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.bottle("Games").path), "nothing is made")
+    }
+
+    // A failed first boot deletes the half-made environment, so its log keeps what Wine had:
+    // drive links, the home and how it resolves, missing builtins, free space, and only the
+    // names of inherited WINE and DYLD variables (highball#547, #446).
+    func testSetupDiagnosticsNameWhatWineHad() throws {
+        let bottle = tmp.appending(path: "bottles/Games", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bottle.appending(path: "dosdevices"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: bottle.appending(path: "dosdevices/z:").path, withDestinationPath: "/")
+        let json = #"{"id":"x64-a-r1","displayName":"e","arch":"x86_64","minMacOS":"14.0","components":{}}"#
+        let engine = InstalledEngine(manifest: try JSONDecoder().decode(EngineManifest.self, from: Data(json.utf8)),
+                                     root: tmp.appending(path: "engine"))
+        let lines = BottleStore.setupDiagnostics(bottle: bottle, engine: engine, home: tmp, missing: ["kernel32.dll"],
+                                                 environment: ["WINEDEBUG": "+all", "DYLD_LIBRARY_PATH": "/secret", "HOME": "/Users/x"])
+        let text = lines.joined(separator: "\n")
+        XCTAssertTrue(text.contains("c: -> missing, z: -> /"), text)
+        XCTAssertTrue(text.contains("builtins missing: kernel32.dll"), text)
+        XCTAssertTrue(text.contains("DYLD_LIBRARY_PATH, WINEDEBUG"), text)
+        XCTAssertFalse(text.contains("/secret"), "variable values stay out of the log")
+        XCTAssertFalse(text.contains("HOME"), "only WINE and DYLD names are listed")
+    }
+
     // The volume check asks the volume instead of trusting a name. The old check read
     // volumeSupportsSymbolicLinks and refused exFAT by name, but macOS reports exFAT as supporting
     // symbolic links and creates them, so it never fired and the promised refusal never happened
