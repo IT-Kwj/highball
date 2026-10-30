@@ -3527,6 +3527,7 @@ final class AppState {
         libraryLaunchArgs = store.launchArguments()
         libraryDisplays = store.displayChoices()
         customNames = nameStore.names()
+        hiddenItems = store.hiddenIDs()
         coverVersion += 1
     }
 
@@ -3720,8 +3721,9 @@ final class AppState {
         let store = gogStore
         let settings = gogSettings
         let extraArguments = pin?.extraArguments ?? launchArguments(for: item)   // the page's Launch arguments, after the task's own
-        let useComet = !retryingWithoutComet && gogSignedIn && settings.cometOff[game.id] == nil
-        let useSaves = gogSignedIn && !settings.cloudSavesOff.contains(game.id)
+        let syncs = pin?.syncsLikeTheGame ?? true   // a pinned tool runs without saves and comet
+        let useComet = syncs && !retryingWithoutComet && gogSignedIn && settings.cometOff[game.id] == nil
+        let useSaves = syncs && gogSignedIn && !settings.cloudSavesOff.contains(game.id)
         runBusy(String(format: L("Starting %@"), item.title), done: .handedOff, stop: .killBottle(bottle, label: L("Stop"))) { [self] in
             await removeMacMetadataFiles(from: game.folder, of: item.title)
             if store.hasManifest(game), !GOGStore.setupDone(for: game, driveC: bottle.driveC) {

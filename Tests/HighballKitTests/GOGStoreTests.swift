@@ -502,6 +502,45 @@ final class GOGStoreTests: XCTestCase {
         XCTAssertEqual(names.name(for: "gog:1"), "Renamed again")
     }
 
+    /// Owner review on #539: a program the player hid came back as a visible GOG tile once that
+    /// tile stood for it. Hide goes along with the name and cover, once, and a GOG tile the player
+    /// showed again after that stays shown.
+    func testCarryOverTakesHideOnce() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "gog-carry-hide-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = HighballPaths(home: home)
+        let store = LibraryStore(paths: paths)
+        let task = GOGStore.PlayTask(path: "Game.exe")
+        let uuid = UUID(), shown = UUID()
+        let hidden = LibraryIndex.CoveredPin(pinItemID: "pin:Games:\(uuid.uuidString)", gogItemID: "gog:1", extraArguments: [], task: task, tilePlaysIt: true)
+        let visible = LibraryIndex.CoveredPin(pinItemID: "pin:Games:\(shown.uuidString)", gogItemID: "gog:2", extraArguments: [], task: task, tilePlaysIt: true)
+        // Hidden under an earlier name of its environment (PinID) counts too.
+        store.setHidden(true, for: "pin:Old name:\(uuid.uuidString)")
+
+        var settings = GOGSettings()
+        LibraryIndex.carryOver([hidden, visible], paths: paths, settings: &settings)
+        XCTAssertTrue(LibraryStore.isHidden("gog:1", in: store.hiddenIDs()))
+        XCTAssertFalse(LibraryStore.isHidden("gog:2", in: store.hiddenIDs()), "a program the player did not hide leaves its GOG tile shown")
+
+        // Once only: showing the GOG tile again is not undone by the next rebuild.
+        store.setHidden(false, for: "gog:1")
+        LibraryIndex.carryOver([hidden], paths: paths, settings: &settings)
+        XCTAssertFalse(LibraryStore.isHidden("gog:1", in: store.hiddenIDs()))
+    }
+
+    /// Owner review on #539: a pinned tool among a game's launch choices (category "tool") plays
+    /// as the GOG game, but must not bring cloud saves down or up, nor run comet, around a
+    /// settings window. Game tasks, and tasks that name no category, still do.
+    func testPinnedToolSkipsSavesAndComet() {
+        func pin(_ category: String?) -> LibraryIndex.CoveredPin {
+            LibraryIndex.CoveredPin(pinItemID: "pin:Games:\(UUID().uuidString)", gogItemID: "gog:1", extraArguments: [],
+                                    task: GOGStore.PlayTask(path: "Tool.exe", category: category), tilePlaysIt: false)
+        }
+        XCTAssertFalse(pin("tool").syncsLikeTheGame)
+        XCTAssertTrue(pin("game").syncsLikeTheGame)
+        XCTAssertTrue(pin(nil).syncsLikeTheGame)
+    }
+
     // MARK: Launch option swaps (round 3)
 
     /// Ghostrunner with a default task, a DX12 choice, a Benchmark choice nobody pinned, and a

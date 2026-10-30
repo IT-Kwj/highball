@@ -127,6 +127,11 @@ public enum LibraryIndex {
         /// page: only then does the tile stand for the pin's own (Ghostrunner pinned with -dx12
         /// keeps its tile while the page plays the game's default).
         public let tilePlaysIt: Bool
+
+        /// Whether starting the pin brings cloud saves along and runs comet: only for a game task.
+        /// A tool or settings program among the launch choices (category "tool") still plays as
+        /// the GOG game, but a settings window has no saves to sync and no achievements to earn.
+        public var syncsLikeTheGame: Bool { task.category == nil || task.category == "game" }
     }
 
     /// `launchChoice` is GOGSettings.launchChoice, what each GOG tile's Play runs.
@@ -216,6 +221,8 @@ public enum LibraryIndex {
                 try? names.setName(name, for: to)
             }
             if covers.coverURL(for: from) != nil, covers.coverURL(for: to) == nil { try? covers.copyCover(from: from, to: to) }
+            let hidden = store.hiddenIDs()
+            if LibraryStore.isHidden(from, in: hidden), !LibraryStore.isHidden(to, in: hidden) { store.setHidden(true, for: to) }
             settings.carriedOverPins.insert(from)
             lines.append("\(from): shown as its GOG game (\(to)) from now on; its settings, name and cover went along")
         }
