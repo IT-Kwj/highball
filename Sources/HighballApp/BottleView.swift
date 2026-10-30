@@ -218,12 +218,15 @@ struct LauncherTile: View {
     var flakyReason: String? = nil
     let action: () -> Void
     @State private var hovering = false
+    @State private var showingReason = false
 
     private var blocked: Bool { blockedReason != nil && !installed }
     private var flaky: Bool { flakyReason != nil && !installed && !blocked }
 
     var body: some View {
-        Button(action: action) {
+        // A blocked tile still takes the click and answers with its reason: macOS shows no tooltip
+        // on a disabled control, so the hover text alone left "Blocked" unexplained (highball#571).
+        Button(action: { if blocked { showingReason = true } else { action() } }) {
             VStack(spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
                     ZStack {
@@ -260,9 +263,16 @@ struct LauncherTile: View {
             .opacity(blocked ? 0.55 : 1)
         }
         .buttonStyle(.plain)
-        .disabled(busy || blocked)
+        .disabled(busy)
         .help(blockedReason.map { L("Blocked on the current engine: ") + $0 }
               ?? flakyReason.map { L("Known issues: ") + $0 } ?? "")
+        .popover(isPresented: $showingReason, arrowEdge: .bottom) {
+            Text(L("Blocked on the current engine: ") + (blockedReason ?? ""))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 320, alignment: .leading)
+                .padding(14)
+        }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
     }
