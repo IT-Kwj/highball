@@ -239,6 +239,7 @@ struct EnginePane: View {
     @Environment(AppState.self) private var state
     /// The updater delegate reads the same key: AppStorage so the switch redraws when flipped.
     @AppStorage(UpdateChannels.betaDefaultsKey) private var betaUpdates = false
+    @AppStorage(AchievementToast.enabledDefaultsKey) private var achievementPopups = true
     @State private var showLicense = false
     @State private var pendingRemove: String?
     @State private var engineSizes: [String: String] = [:]
@@ -278,6 +279,17 @@ struct EnginePane: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle(L("Share game activity with Discord"), isOn: $state.discordSharingEnabled)
                     Text(L("Let Discord show what you play and the game's Rich Presence while both apps are open. Off by default."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            GroupBox {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Toggle(L("Show achievement pop-ups"), isOn: $achievementPopups)
+                        Spacer()
+                        Button(L("Preview")) { state.previewAchievementPopup() }.controlSize(.small)
+                    }
+                    Text(L("When a GOG game unlocks an achievement, its badge shows in the corner of the screen for a few seconds, with a sound. The game keeps focus."))
                         .font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }

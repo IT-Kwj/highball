@@ -133,10 +133,67 @@ struct GameDetailView: View {
         }
     }
 
+    /// A GOG game's own settings, one row each like the rest of the page: comet (achievements and
+    /// stats), cloud saves, which launch task Play runs, and an update for a game gogdl installed.
+    @ViewBuilder private func gogSettings(_ game: GOGStore.InstalledGame) -> some View {
+        let cometOff = state.gogSettings.cometOff[game.id]
+        HStack(alignment: .top, spacing: 12) {
+            Text(L("Achievements")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(L("Achievements and stats (comet)"), isOn: Binding(
+                    get: { cometOff == nil }, set: { state.gogSetComet($0, for: game.id) }))
+                    .toggleStyle(.checkbox).disabled(!state.gogSignedIn)
+                Text(cometOff == GOGSettings.crashedWithComet
+                     ? L("Turned off after the game closed at once with comet running and then started fine without it. Turn it back on to try again.")
+                     : L("comet stands in for GOG Galaxy while the game runs, so achievements, stats and play time reach your GOG account. If the game won't start with it, Highball starts it again without."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        HStack(alignment: .top, spacing: 12) {
+            Text(L("Cloud saves")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(L("Sync saves with GOG"), isOn: Binding(
+                    get: { !state.gogSettings.cloudSavesOff.contains(game.id) }, set: { state.gogSetCloudSaves($0, for: game.id) }))
+                    .toggleStyle(.checkbox).disabled(!state.gogSignedIn)
+                Text(L("Saves come down from GOG's cloud before Play and go back up when the game ends. If both copies changed, Highball asks which one wins."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !state.gogSignedIn {
+                    Button(L("Connect GOG")) { state.showGOGSignIn = true }.controlSize(.small)
+                }
+            }
+        }
+        if !game.launchChoices.isEmpty {
+            HStack(alignment: .top, spacing: 12) {
+                Text(L("Launch option")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)
+                Picker("", selection: Binding(
+                    get: { state.gogSettings.launchChoice[game.id] ?? -1 },
+                    set: { state.gogSetLaunchChoice($0 < 0 ? nil : $0, for: game.id) })) {
+                    Text(L("GOG's default")).tag(-1)
+                    ForEach(Array(game.launchChoices.enumerated()), id: \.offset) { index, task in
+                        Text(verbatim: task.name ?? task.path ?? "").tag(index)
+                    }
+                }.labelsHidden().frame(maxWidth: 360)
+            }
+        }
+        if state.gogStore.hasManifest(game) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(L("Version")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: game.buildID.map { String(format: L("GOG build %@"), $0) } ?? "GOG").font(.callout)
+                        Button(L("Update from GOG")) { state.gogUpdate(item) }.controlSize(.small).disabled(state.busy)
+                    }
+                    Text(L("Downloads only what changed since this build. Nothing happens when it is already the newest."))
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     private var libraryInfo: some View {
         VStack(alignment: .leading, spacing: 12) {
             row(L("Source"), item.source == .steam ? "Steam" : item.source == .epic ? "Epic Games"
-                : item.source == .battlenet ? "Battle.net" : L("Windows program"))
+                : item.source == .gog ? "GOG" : item.source == .battlenet ? "Battle.net" : L("Windows program"))
             if item.sizeOnDisk > 0 {
                 row(L("Size on disk"), ByteCountFormatter.string(fromByteCount: item.sizeOnDisk, countStyle: .file))
             }
@@ -336,7 +393,7 @@ struct GameDetailView: View {
                          : L("Its anti-cheat does not run on macOS."))
                         .font(.callout).foregroundStyle(.secondary)
                 }
-            } else if item.source == .epic {
+            } else if item.source == .epic || item.source == .gog {
                 Button { state.install(item) } label: { primaryActionLabel(L("Install"), symbol: "arrow.down") }.buttonStyle(.borderedProminent).controlSize(.large).tint(HB.amber)
                     .disabled(state.busy)
                 Text(String(format: L("Installs into %@."), state.defaultBottle?.name ?? L("your environment"))).font(.callout).foregroundStyle(.secondary)
@@ -506,7 +563,7 @@ struct GameDetailView: View {
                                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        if item.source == .steam || item.source == .epic {
+                        if item.source == .steam || item.source == .epic || item.source == .gog {
                             HStack(alignment: .top, spacing: 12) {
                                 Text(L("Launch arguments")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading).padding(.top, 4)
                                 VStack(alignment: .leading, spacing: 4) {
@@ -522,6 +579,9 @@ struct GameDetailView: View {
                                 argsText = ArgumentLine.join(state.launchArguments(for: item)); argsLoaded = true
                             }
                             .onDisappear { state.setLaunchArguments(argsText, for: item) }
+                        }
+                        if item.source == .gog, let game = state.gogInstalled(item, in: bottle) {
+                            gogSettings(game)
                         }
                         // The engine is the environment's, so the page says so and can change it
                         // through the same switch page as the environment's settings, which lists
@@ -600,7 +660,9 @@ struct GameDetailView: View {
                             Button(L("Show the Windows drive")) { NSWorkspace.shared.open(bottle.driveC) }.controlSize(.small)
                             if item.installed {
                                 Button(L("Uninstall…"), role: .destructive) { state.askUninstall(item) }.controlSize(.small)
-                                    .help(L("Steam and the Epic tools do their own uninstalling, so their libraries stay right."))
+                                    .disabled(state.uninstallWaitsFor(item) != nil)
+                                    .help(state.uninstallWaitsFor(item).map { String(format: L("Available once “%@” has finished."), $0) }
+                                          ?? L("Steam and the Epic tools do their own uninstalling, so their libraries stay right."))
                             }
                             if MacAppStub.existing(for: item.title) != nil {
                                 Button(L("Remove the Mac app")) { state.removeMacApp(title: item.title) }.controlSize(.small)

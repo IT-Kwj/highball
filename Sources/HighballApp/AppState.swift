@@ -7,6 +7,17 @@ import os
 /// The three Settings tabs, so a deep link can select one.
 enum SettingsTab: Hashable { case environments, engine, troubleshooting }
 
+/// A GOG cloud-save conflict: this Mac's saves and GOG's both changed since the last sync, so
+/// gogdl moved nothing and the player picks which copy wins (GOGSaves).
+struct GOGSaveConflict: Identifiable {
+    enum Choice { case useCloud, keepMac, skip }
+    let id = UUID()
+    let title: String
+    /// Asked before Play (the launch waits) or after the game ended.
+    let beforePlay: Bool
+    let resolve: (Choice) -> Void
+}
+
 @Observable @MainActor
 final class AppState {
     var engines: [InstalledEngine] = []
@@ -279,9 +290,11 @@ final class AppState {
 
     func rebuildLibrary() {
         customNames = nameStore.names()
+        carryOverGOGCoveredPins()
         libraryItems = LibraryIndex.build(bottles: bottles, steamByBottle: gamesByBottle,
                                           steamOwnedByBottle: steamOwnedByBottle, macInstalled: includeMacSteam ? macSteamGames : [],
                                           epicOwned: epicOwned, epicInstalls: epicInstalls,
+                                          gogGames: gogGames, gogInstalledByBottle: gogInstalledByBottle, gogLaunchChoice: gogSettings.launchChoice,
                                           battleNetByBottle: battleNetByBottle,
                                           plays: libraryPlays, defaultBottle: defaultBottle?.name,
                                           pinExists: { bottle, pin in
@@ -686,6 +699,8 @@ final class AppState {
             guard let game = epicOwned.first(where: { $0.app_name == item.epicAppName }) else { return }
             epicPlay(game, in: bottle, renderer: renderer,
                      throughEpicLauncherStandIn: fixRecipe(for: item)?.requires?.contains("rockstar") == true)
+        case .gog:
+            gogPlay(item, in: bottle, renderer: renderer)
         case .pin:
             guard let pin = bottle.settings.pins.first(where: { $0.id == item.pinID }) else { return }
             launch(pin: pin.launching(with: renderer), in: bottle)
@@ -768,6 +783,11 @@ final class AppState {
     /// menu in the detail view refines it, never a modal prerequisite. Steam hands off to Steam.
     func install(_ item: LibraryItem) {
         if item.source == .steam { installSteamGame(item); return }
+        if item.source == .gog {
+            guard let target = item.bottleName.flatMap({ name in bottles.first { $0.name == name } }) ?? defaultBottle else { return }
+            gogInstall(item, in: target)
+            return
+        }
         guard item.source == .epic,
               let game = epicOwned.first(where: { $0.app_name == item.epicAppName }) else { return }
         guard let target = item.bottleName.flatMap({ name in bottles.first { $0.name == name } }) ?? defaultBottle else { return }
@@ -838,6 +858,21 @@ final class AppState {
     var epicLoading = false
     private var epicFetchInFlight = false
     var showEpicSignIn = false
+
+    // GOG (via gogdl and comet; see GOGStore)
+    var gogSignedIn = false
+    var gogAccountName: String?
+    /// The account's games, plus any GOG game installed in an environment that the account list
+    /// does not name (an offline installer's, while signed out), looked up in GOG's database.
+    var gogGames: [GOGStore.Game] = []
+    /// What each environment holds, read from the goggame-<id>.info files on disk.
+    var gogInstalledByBottle: [String: [GOGStore.InstalledGame]] = [:]
+    var gogLoading = false
+    private var gogFetchInFlight = false
+    var showGOGSignIn = false
+    var gogSettings = GOGSettings()
+    /// A cloud-save conflict waiting for the player's choice (GOGSaves.Outcome.conflict).
+    var gogSaveConflict: GOGSaveConflict?
 
     /// A Windows program awaiting the run/pin choice (from drag-drop, the File menu, or the button).
     var pendingRun: URL?
@@ -1004,9 +1039,10 @@ final class AppState {
     @ObservationIgnored private var installWatcher: DirectoryWatcher?
 
     /// The directories whose entries change when a game is installed or removed: the steamapps
-    /// of each Steam library folder (appmanifest files) and the folder Epic installs land in.
+    /// of each Steam library folder (appmanifest files), the folder Epic installs land in, and the
+    /// folders GOG installs land in (the first of which is that same Games folder).
     private func installDirectories(of bottle: Bottle) -> [URL] {
-        [bottle.driveC.appending(path: "Games")] + SteamLibrary.steamappsDirectories(of: bottle)
+        GOGStore.installRoots(driveC: bottle.driveC) + SteamLibrary.steamappsDirectories(of: bottle)
     }
 
     /// The cheap part of `refresh`: installed games only. Runs on every install-record change,
@@ -1018,6 +1054,7 @@ final class AppState {
         let mac = MacSteam.installedGames()
         if mac != macSteamGames { macSteamGames = mac; rebuildLibrary() }
         refreshEpicInstalls()
+        refreshGOGInstalls()
     }
 
     /// The Windows Steam part of `refreshInstalledGames`, without legendary, so the client watch
@@ -1116,6 +1153,7 @@ final class AppState {
         rebuildLibrary()
         steamOwnedRefresh()
         epicRefresh()
+        gogRefresh()
         maybeAutoUpdateEngine()
         if gameDB.byAppID.isEmpty {
             var dirs: [URL] = []
@@ -1999,7 +2037,10 @@ final class AppState {
     }
 
     private func resolvePlayLink(_ request: PlayLink.Request) {
-        if let item = libraryItems.first(where: { $0.id == request.target.libraryID }) {
+        // A program its GOG tile now stands for has no tile of its own: a Mac app made for it before
+        // still plays it, as the GOG game (launch(pin:)), and does not say it is not in the library.
+        if let item = libraryItems.first(where: { $0.id == request.target.libraryID })
+            ?? LibraryIndex.coveredPinItem(forLink: request.target, bottles: bottles, gogInstalledByBottle: gogInstalledByBottle) {
             deferredPlayLink = nil
             if request.token == PlayLink.token(in: paths) { play(item) } else { pendingPlayLink = item }
             return
@@ -2054,6 +2095,11 @@ final class AppState {
         switch item.source {
         case .steam, .epic, .battlenet:
             return programFolder(for: item).flatMap { PEIcon.bestExecutable(in: $0) }
+        case .gog:
+            // The file Play runs, so the per-program settings (display mode) apply to the game itself.
+            guard let game = gogInstalled(item, in: bottle), let task = game.launchTask(choice: gogSettings.launchChoice[game.id]),
+                  let launch = GOGStore.launch(task, in: game) else { return nil }
+            return launch.executable
         case .pin:
             return item.pinID.flatMap { id in bottle.settings.pins.first { $0.id == id } }.map { $0.executableURL(driveC: bottle.driveC) }
         }
@@ -2072,6 +2118,8 @@ final class AppState {
             folder = game.installFolder ?? bottle.driveC.appending(path: "Program Files (x86)/Steam/steamapps/common/\(game.installdir)", directoryHint: .isDirectory)
         case .epic:
             folder = item.epicAppName.flatMap { epicInstalls[$0] }.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        case .gog:
+            folder = gogInstalled(item, in: bottle)?.folder
         case .pin:
             folder = item.pinID.flatMap { id in bottle.settings.pins.first { $0.id == id } }.map { $0.executableURL(driveC: bottle.driveC).deletingLastPathComponent() }
         case .battlenet:
@@ -2192,11 +2240,27 @@ final class AppState {
         pendingUninstall = (item, Uninstall.route(for: item))
     }
 
+    /// What is holding the progress strip when removing `item` needs it (Epic and GOG removals
+    /// run there, one operation at a time), so the button can say why it waits. Nil otherwise.
+    func uninstallWaitsFor(_ item: LibraryItem) -> String? {
+        guard busy else { return nil }
+        switch Uninstall.route(for: item) {
+        case .epic, .gog: return busyTitle
+        default: return nil
+        }
+    }
+
     /// Carries out the route the ask offered.
     func uninstallConfirmed() {
         guard let (item, route) = pendingUninstall else { return }
         pendingUninstall = nil
         guard let bottleName = item.bottleName, let bottle = bottles.first(where: { $0.name == bottleName }) else { return }
+        // runBusy drops a second operation, so a removal confirmed while another one runs (the
+        // ask opened just before it started) would do nothing at all: say so instead.
+        if let holder = uninstallWaitsFor(item) {
+            errorMessage = String(format: L("Highball is still busy with “%@”. Remove %@ once that has finished, or stop it in the bar at the bottom."), holder, item.title)
+            return
+        }
         switch route {
         case let .steam(appID):
             guard let engine = engine(for: bottle) else { return }
@@ -2222,6 +2286,8 @@ final class AppState {
                 _ = try store.uninstall(appName) { line in Task { @MainActor in self.appendLog(line) } }
                 await MainActor.run { self.refresh() }
             }
+        case let .gog(id):
+            gogUninstall(id: id, title: item.title, in: bottle)
         case .windowsUninstaller:
             openUninstaller(in: bottle)
         case .none:
@@ -2603,9 +2669,15 @@ final class AppState {
         return windows.contains { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
     }
 
+    /// Work a launch leaves for the end of its session (a GOG game's comet and save upload).
+    @ObservationIgnored private var sessionEndActions: [UUID: (SessionRecord) -> Void] = [:]
+
     private func endSession(_ session: GameSession, reason: String) {
         guard runningSessions.contains(session) else { return }
         runningSessions.removeAll { $0.id == session.id }
+        defer {
+            if let action = sessionEndActions.removeValue(forKey: session.id), let record = lastEndedSession { action(record) }
+        }
         discordEnvironments[session.id] = nil
         if runningSessions.isEmpty { stopDiscordWatch() }
         sessionWatchers[session.id]?.cancel()
@@ -2655,6 +2727,15 @@ final class AppState {
     }
 
     func launch(pin: Pin, in bottle: Bottle) {
+        // A program its GOG tile stands for plays as that game, with comet and cloud saves,
+        // wherever it was started from (the environment's Programs list, a tile from before).
+        // It runs the program and arguments the player picked, whatever the GOG tile plays.
+        if let standing = gogItem(standingFor: pin, in: bottle) {
+            let (item, covered) = standing
+            appendLog("\(pin.name): playing it as \(item.title) from GOG, for achievements and cloud saves")
+            gogPlay(item, in: bottle, renderer: pin.renderer, as: covered)
+            return
+        }
         guard let engine = engine(for: bottle) else { return }
         // A pinned program's own mode behind an unaccepted licence gets the same ask as a game's
         // (#61); the runner degrades any other mode the engine lacks, with a note.
@@ -3087,6 +3168,9 @@ final class AppState {
                         }
                         crashed(result); return false
                     }
+                    // A launcher that starts the game and exits cleanly between two polls: the
+                    // game is already up, and that is the hand-off.
+                    if await started() { box.handedOff = true; return true }
                     if exitEndsWait { return false }
                     exited = true
                 }
@@ -3365,6 +3449,584 @@ final class AppState {
         return target
     }
 
+    // MARK: GOG
+
+    var gogStore: GOGStore { GOGStore(paths: paths) }
+
+    /// Signed-in state, what is installed (from disk, cheap) and the account's games (from GOG,
+    /// cached per game in GOGStore, so a refresh is one or two library requests).
+    func gogRefresh() {
+        gogSignedIn = gogStore.isAuthenticated
+        gogAccountName = gogSignedIn ? gogStore.username : nil
+        gogSettings = GOGSettings.load(gogStore)
+        refreshGOGInstalls()
+        guard !gogFetchInFlight else { return }
+        gogFetchInFlight = true
+        gogLoading = gogSignedIn && gogGames.isEmpty
+        let signedIn = gogSignedIn
+        let installedIDs = Set(gogInstalledByBottle.values.joined().map(\.id))
+        Task.detached { [store = gogStore] in
+            GOGComet(store: store).removeStaleTokens()
+            var games = signedIn ? ((try? await store.ownedGames()) ?? []) : []
+            // A GOG game in an environment that the account list does not name still gets its
+            // title, cover and database match.
+            let known = Set(games.map(\.id))
+            for id in installedIDs.subtracting(known).sorted() {
+                if let game = store.game(id) { games.append(game) }
+            }
+            let found = games
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.gogFetchInFlight = false
+                self.gogLoading = false
+                if found != self.gogGames { self.gogGames = found; self.rebuildLibrary() }
+            }
+        }
+    }
+
+    /// The disk half of `gogRefresh`: goggame-<id>.info files under each environment's install
+    /// folders. Runs on every install-record change, like Steam's.
+    private func refreshGOGInstalls() {
+        let found = Dictionary(bottles.map { ($0.name, GOGStore.installedGames(driveC: $0.driveC)) }, uniquingKeysWith: { a, _ in a })
+        let store = gogStore
+        for game in found.values.joined() { store.adoptManifest(for: game) }
+        guard found != gogInstalledByBottle else { return }
+        let newIDs = Set(found.values.joined().map(\.id)).subtracting(gogGames.map(\.id))
+        gogInstalledByBottle = found
+        forgetProgramExecutables()
+        rebuildLibrary()
+        if !newIDs.isEmpty, !gogFetchInFlight { gogRefresh() }
+    }
+
+    /// The GOG tile a program added by hand plays as (LibraryIndex.gogCoveredPins), if any, with
+    /// what the program runs. Read off the environment's saved pins, so a launch-time mode on
+    /// `pin` does not hide it.
+    private func gogItem(standingFor pin: Pin, in bottle: Bottle) -> (LibraryItem, LibraryIndex.CoveredPin)? {
+        let id = "pin:\(bottle.name):\(pin.id.uuidString)"
+        guard let covered = LibraryIndex.gogCoveredPins(bottles: [bottle], gogInstalledByBottle: gogInstalledByBottle)
+            .first(where: { $0.pinItemID == id }),
+              let item = libraryItems.first(where: { $0.id == covered.gogItemID }) else { return nil }
+        return (item, covered)
+    }
+
+    /// A program added by hand that its GOG tile now stands for (LibraryIndex.gogCoveredPins)
+    /// hands its settings, name and cover to that tile once (LibraryIndex.carryOver),
+    /// so the pin's tile can leave the library without the game playing or looking different.
+    private func carryOverGOGCoveredPins() {
+        // Read from disk, not `gogSettings`: a rebuild can come before gogRefresh has loaded it,
+        // and saving the empty default would wipe the player's GOG choices.
+        var settings = GOGSettings.load(gogStore)
+        let covered = LibraryIndex.gogCoveredPins(bottles: bottles, gogInstalledByBottle: gogInstalledByBottle, launchChoice: settings.launchChoice)
+            .filter { $0.tilePlaysIt && !LibraryIndex.wasCarriedOver($0.pinItemID, in: settings.carriedOverPins) }
+        guard !covered.isEmpty else { return }
+        for line in LibraryIndex.carryOver(covered, paths: paths, settings: &settings) { appendLog(line) }
+        settings.save(gogStore)
+        gogSettings = settings
+        let store = libraryStore
+        libraryOverrides = store.rendererOverrides()
+        libraryLaunchArgs = store.launchArguments()
+        libraryDisplays = store.displayChoices()
+        customNames = nameStore.names()
+        hiddenItems = store.hiddenIDs()
+        coverVersion += 1
+    }
+
+    /// The copy of a GOG game in an environment, read from disk.
+    func gogInstalled(_ item: LibraryItem, in bottle: Bottle) -> GOGStore.InstalledGame? {
+        guard let id = item.gogID else { return nil }
+        return gogInstalledByBottle[bottle.name]?.first { $0.id == id }
+    }
+
+    /// Connects the account from the sign-in sheet, which stays open to show progress and says in
+    /// place what went wrong. The first connect also downloads gogdl.
+    func gogConnect(code: String) async throws {
+        let store = gogStore
+        do {
+            try await store.ensureInstalled()
+        } catch {
+            appendLog("GOG: could not download gogdl: \(error.localizedDescription)")
+            throw HighballError.failed(L("Highball could not download the small tool it uses to connect to GOG. Check your internet connection, then try again."))
+        }
+        try await Task.detached { try store.authenticate(code: code) }.value
+        gogRefresh()
+    }
+
+    func gogSignOut() {
+        gogStore.logout()
+        gogGames = []
+        gogRefresh()
+    }
+
+    /// The GOG download running now, for the strip's Stop and for quitting the app.
+    @ObservationIgnored private var gogInstallControl: LegendaryControl?
+
+    /// Downloads a GOG game into an environment with gogdl, then does what GOG's installer would
+    /// have done (GOGStore.setupSteps).
+    func gogInstall(_ item: LibraryItem, in bottle: Bottle) {
+        guard let id = item.gogID else { return }
+        runBusy(String(format: L("Installing %@"), item.title), expected: L("a large download; you can leave it running"),
+                stop: .cancelTask(label: L("Stop")), cleanup: { [weak self] in self?.gogInstallControl = nil }) { [self] in
+            let store = gogStore
+            try await store.ensureInstalled()
+            stage = L("Asking GOG about the download")
+            let info = try await Task.detached { try store.info(id) }.value
+            let language = GOGStore.language(for: info.languages)
+            appendLog("\(item.title): GOG build \(info.buildID ?? "?"), language \(language), \(info.diskSize.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown") on disk")
+            if !info.dependencies.isEmpty {
+                stage = L("Fetching the Windows runtimes the game needs")
+                let status = try? await Task.detached { try store.downloadRedists(info.dependencies) { line in Task { @MainActor in self.appendLog(line) } } }.value
+                if status != 0 { appendLog("\(item.title): the shared Windows runtimes did not all download; the game may ask for them") }
+            }
+            stage = String(format: L("Downloading %@"), item.title)
+            try await gogDownload(title: item.title, command: "gogdl download", completed: { store.downloadCompleted(id) }) { control, onLine in
+                try store.install(id, into: bottle, language: language, control: control, onLine: onLine)
+            }
+            busyProgress = nil; transferRate = nil
+            refreshGOGInstalls()
+            if let game = gogInstalledByBottle[bottle.name]?.first(where: { $0.id == id }) {
+                store.keepManifest(for: game)
+                try await gogRunSetup(game, title: item.title, in: bottle, language: language)
+            }
+            await MainActor.run { self.gogRefresh() }
+        }
+    }
+
+    /// Updates a game gogdl installed to GOG's newest build, then runs its setup again.
+    func gogUpdate(_ item: LibraryItem) {
+        guard let bottleName = item.bottleName, let bottle = bottles.first(where: { $0.name == bottleName }),
+              let game = gogInstalled(item, in: bottle) else { return }
+        runBusy(String(format: L("Updating %@"), item.title), expected: L("a large download; you can leave it running"),
+                stop: .cancelTask(label: L("Stop")), cleanup: { [weak self] in self?.gogInstallControl = nil }) { [self] in
+            let store = gogStore
+            try await store.ensureInstalled()
+            let info = try await Task.detached { try store.info(game.id) }.value
+            let language = GOGStore.language(for: info.languages)
+            try await gogDownload(title: item.title, command: "gogdl update", completed: { true }) { control, onLine in
+                try store.update(game, language: language, control: control, onLine: onLine)
+            }
+            busyProgress = nil; transferRate = nil
+            store.keepManifest(for: game)
+            refreshGOGInstalls()
+            if let fresh = gogInstalledByBottle[bottle.name]?.first(where: { $0.id == game.id }) {
+                try await gogRunSetup(fresh, title: item.title, in: bottle, language: language)
+            }
+        }
+    }
+
+    /// One gogdl transfer (an install or an update) under the strip: progress and rate, Stop, and
+    /// the stall watchdog. gogdl's downloads sometimes stall with the connection still open; a
+    /// transfer with no progress for two minutes is stopped and resumed where it was, up to five
+    /// times, so a stall never needs the player.
+    private func gogDownload(title: String, command: String, completed: @escaping @Sendable () -> Bool,
+                             run: @escaping @Sendable (LegendaryControl, @escaping @Sendable (String) -> Void) throws -> Int32) async throws {
+        for attempt in 1...5 {
+            let control = LegendaryControl()
+            gogInstallControl = control
+            let failure = OSAllocatedUnfairLock<String?>(initialState: nil)
+            // Signs of life: bytes written going up, or any line that is not a progress line (gogdl
+            // checks files for a long time before a resume or an update). A progress line alone
+            // proves nothing: gogdl keeps printing one each second through a stall.
+            let lastProgress = OSAllocatedUnfairLock(initialState: (at: Date(), written: Int64(-1)))
+            let stalled = OSAllocatedUnfairLock(initialState: false)
+            let watchdog = Task.detached {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(15))
+                    if Date().timeIntervalSince(lastProgress.withLock { $0.at }) > 120 {
+                        stalled.withLock { $0 = true }
+                        control.stop()
+                        return
+                    }
+                }
+            }
+            let status = try await withTaskCancellationHandler {
+                try await Task.detached {
+                    try run(control) { line in
+                        if let why = GOGStore.installFailure(line) { failure.withLock { if $0 == nil { $0 = why } } }
+                        let progress = GOGStore.progress(inGogdlLine: line)
+                        lastProgress.withLock { last in
+                            if let p = progress {
+                                if p.written > last.written { last = (Date(), p.written) }
+                            } else if !line.contains("[PROGRESS]") {
+                                last.at = Date()
+                            }
+                        }
+                        Task { @MainActor in
+                            if progress == nil, !line.contains("[PROGRESS]") { self.appendLog(line) }
+                            if let p = progress, self.busy { self.recordTransfer(received: p.written, total: p.total > 0 ? p.total : nil) }
+                        }
+                    }
+                }.value
+            } onCancel: { control.stop() }
+            watchdog.cancel()
+            try Task.checkCancellation()
+            if stalled.withLock({ $0 }), attempt < 5 {
+                appendLog("\(title): the download stalled for two minutes, resuming it (attempt \(attempt + 1) of 5)")
+                try await Task.sleep(for: .seconds(12))   // the stopped gogdl lets go of its files
+                continue
+            }
+            if let why = failure.withLock({ $0 }) { throw HighballError.failed(why) }
+            guard status == 0, completed() else {
+                throw HighballError.processFailed(command: command, status: status == 0 ? 1 : status,
+                                                  output: "the download did not finish; press the button again to resume it")
+            }
+            return
+        }
+    }
+
+    /// Quitting the app stops a GOG download the way Stop does; gogdl resumes it next time.
+    func stopGOGInstall() { gogInstallControl?.stop() }
+
+    /// Runs what GOG's installer would have: the Windows runtimes the game lists, then its install
+    /// scripts. A step that fails is logged and the next one runs; nothing here stops the game
+    /// from being played, which is how Galaxy behaves when a runtime is already newer.
+    private func gogRunSetup(_ game: GOGStore.InstalledGame, title: String, in bottle: Bottle, language: String) async throws {
+        guard let engine = engine(for: bottle) else { return }
+        var ran = 0
+        try await gogStore.runSetup(game, language: language, runner: WineRunner(paths: paths, engine: engine, bottle: bottle),
+                                    onStep: { n, total, label in
+                                        ran = total
+                                        self.stage = String(format: L("Setting up %@: %@ (%d of %d)"), title, label, n, total)
+                                    },
+                                    onLine: { line in Task { @MainActor in self.appendLog(line) } },
+                                    onFailure: { label, code in
+                                        self.appendLog("\(title): \(label) ended with code \(code); carrying on (a newer copy is often already there)")
+                                    })
+        if ran > 0 { appendLog("\(title): GOG setup done (\(ran) step\(ran == 1 ? "" : "s"))") }
+    }
+
+    /// Plays a GOG game: its setup if this build has not had it here, saves down from GOG's cloud,
+    /// comet beside it for achievements, then the game's own launch task. Saves go back up and
+    /// comet stops when the session ends.
+    ///
+    /// comet never costs a launch: one that cannot start is skipped, and a game that crashes at
+    /// once with comet running starts again straight away without it. When that second start
+    /// works, the game is remembered as one that runs without comet (its page says so and can
+    /// turn it back on); when it crashes too, comet was not the cause and nothing is remembered.
+    /// `pin` is a program added by hand that plays as this game (LibraryIndex.CoveredPin): its own
+    /// task and arguments run instead of the ones the game's page picks.
+    func gogPlay(_ item: LibraryItem, in bottle: Bottle, renderer: Renderer? = nil, as pin: LibraryIndex.CoveredPin? = nil,
+                 retryingWithoutComet: Bool = false) {
+        guard let engine = engine(for: bottle), let game = gogInstalled(item, in: bottle) else {
+            fail(HighballError.failed("\(item.title) is not installed in \(bottle.name)."))
+            return
+        }
+        if runningSessions.contains(where: { $0.libraryID == item.id && $0.bottleName == bottle.name }) {
+            fail(HighballError.failed("\(item.title) is already running."))
+            return
+        }
+        guard let task = pin?.task ?? game.launchTask(choice: gogSettings.launchChoice[game.id]), let launch = GOGStore.launch(task, in: game) else {
+            fail(HighballError.failed("\(item.title)'s GOG files name no program to run. Show the game's folder and add its .exe as a program instead."))
+            return
+        }
+        let store = gogStore
+        let settings = gogSettings
+        let extraArguments = pin?.extraArguments ?? launchArguments(for: item)   // the page's Launch arguments, after the task's own
+        let syncs = pin?.syncsLikeTheGame ?? true   // a pinned tool runs without saves and comet
+        let useComet = syncs && !retryingWithoutComet && gogSignedIn && settings.cometOff[game.id] == nil
+        let useSaves = syncs && gogSignedIn && !settings.cloudSavesOff.contains(game.id)
+        runBusy(String(format: L("Starting %@"), item.title), done: .handedOff, stop: .killBottle(bottle, label: L("Stop"))) { [self] in
+            await removeMacMetadataFiles(from: game.folder, of: item.title)
+            if store.hasManifest(game), !GOGStore.setupDone(for: game, driveC: bottle.driveC) {
+                let info = try? await Task.detached { try store.info(game.id) }.value
+                try await gogRunSetup(game, title: item.title, in: bottle, language: GOGStore.language(for: info?.languages ?? []))
+            }
+            let saveFolders = useSaves ? await gogSaveLocations(game, in: bottle) : []
+            for (location, folder) in saveFolders {
+                stage = L("Bringing your saves down from GOG")
+                try await gogSync(game, title: item.title, location: location, folder: folder, direction: .download, beforePlay: true)
+            }
+            // Stop during the steps before the game (setup, saves) ends the launch there: the
+            // strip already reads "Stopped", so nothing may start after it.
+            try Task.checkCancellation()
+
+            var comet: Process?
+            let cometLog = paths.logs.appending(path: "\(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: ""))-comet-\(game.id).log")
+            if useComet {
+                stage = L("Starting comet for achievements")
+                comet = await gogStartComet(for: game, in: bottle, engine: engine, log: cometLog)
+                if let comet { watchAchievements(of: game, item: item, bottleName: bottle.name, comet: comet, log: cometLog) }
+            }
+            if Task.isCancelled {
+                GOGComet(store: store).stop(comet)
+                throw CancellationError()
+            }
+
+            let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+            let box = LaunchOutcome()
+            let log = logLine(box)
+            let row = gameDB.entry(for: item)
+            let gameEnvironment = bottle.settings.environment(forGame: row?.id)
+            watchedLaunch(box) {
+                try await runner.start(launch.executable, arguments: launch.arguments + extraArguments, renderer: renderer,
+                                       extraEnvironment: gameEnvironment, workingDirectory: launch.workingDirectory, onOutput: log)
+            }
+            // Every program in the game's folder: a launcher task hands over to another .exe and exits.
+            let markers = await Task.detached { game.sessionMarkers(launching: launch.executable) }.value
+            var crashedWithComet = false
+            let handedOff: Bool
+            do {
+                handedOff = try await awaitHandoff(box, program: item.title, timeout: 360) {
+                    let processes = await Self.processList()
+                    box.processList = processes
+                    // This environment's processes only: a same-named program elsewhere is not this game.
+                    let prefix = bottle.url
+                    return await Task.detached { !SessionWatch.pids(ofPrefix: prefix, markers: markers).isEmpty }.value
+                } crashed: { result in
+                    if comet != nil {
+                        crashedWithComet = true
+                        return
+                    }
+                    let current = renderer ?? bottle.settings.renderer
+                    self.crashSuggestion = CrashSuggestion(program: item.title, bottleName: bottle.name,
+                                                           renderer: Renderer.suggestion(after: current, d3dmetalAvailable: engine.rendererDir("d3dmetal") != nil, vkd3dAvailable: engine.rendererDir("vkd3d") != nil),
+                                                           logPath: result.log.path, current: current, seconds: Int(result.duration),
+                                                           alternateEngine: self.alternateEngine(for: bottle))
+                }
+            } catch {
+                // Never started, failed to start, or Stop: comet must not outlive the launch
+                // (it would hold port 9977 and its copy of the tokens).
+                GOGComet(store: store).stop(comet)
+                throw error
+            }
+            guard handedOff else {
+                GOGComet(store: store).stop(comet)
+                if crashedWithComet {
+                    appendLog("\(item.title) closed right away with comet running; starting it again without comet")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        guard let self, let fresh = self.bottles.first(where: { $0.name == bottle.name }) else { return }
+                        self.gogPlay(item, in: fresh, renderer: renderer, as: pin, retryingWithoutComet: true)
+                    }
+                }
+                return
+            }
+            if retryingWithoutComet, gogSettings.cometOff[game.id] == nil, gogSignedIn {
+                gogSettings.cometOff[game.id] = GOGSettings.crashedWithComet
+                gogSettings.save(store)
+                appendLog("\(item.title) runs without comet from now on (it closed at once with it); its page can turn comet back on")
+            }
+            if comet != nil, !GOGComet.isListening(log: cometLog) {
+                appendLog("\(item.title): comet did not come up (its log is \(cometLog.lastPathComponent)); the game runs without achievements this time")
+            }
+            let session = GameSession(title: item.title, bottleName: bottle.name, appid: nil, markers: markers,
+                                      renderer: (renderer ?? bottle.settings.renderer).rawValue, libraryID: item.id,
+                                      startNotice: row?.startNotice, startNoticeMinutes: row?.startNoticeMinutes)
+            sessionEndActions[session.id] = { [weak self] _ in
+                GOGComet(store: store).stop(comet)
+                guard let self, !saveFolders.isEmpty else { return }
+                Task { @MainActor in
+                    for (location, folder) in saveFolders {
+                        try? await self.gogSync(game, title: item.title, location: location, folder: folder, direction: .upload, beforePlay: false)
+                    }
+                }
+            }
+            beginSession(session, processList: box.processList)
+        }
+    }
+
+    /// comet up and listening, or nil: never an error. The placeholder service it needs is set up
+    /// once per environment.
+    private func gogStartComet(for game: GOGStore.InstalledGame, in bottle: Bottle, engine: InstalledEngine, log: URL) async -> Process? {
+        let store = gogStore
+        let comet = GOGComet(store: store)
+        do {
+            let tools = try await store.ensureComet()
+            if try await GOGComet.installService(from: tools.service, runner: WineRunner(paths: paths, engine: engine, bottle: bottle)) {
+                appendLog("\(bottle.name): registered the GalaxyCommunication placeholder comet uses")
+            }
+            // Only GOG sessions leave an end action, so none means no game of ours uses a comet.
+            let noOtherGame = sessionEndActions.isEmpty
+            let process = try await Task.detached {
+                if noOtherGame { comet.stopStrays() }
+                return try comet.start(log: log)
+            }.value
+            for _ in 0..<20 where !GOGComet.isListening(log: log) && process.isRunning {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard process.isRunning else {
+                appendLog("\(game.title): comet exited at start (log \(log.lastPathComponent)); playing without achievements")
+                comet.stop(nil)
+                return nil
+            }
+            appendLog("\(game.title): comet is running for achievements and stats")
+            return process
+        } catch {
+            appendLog("\(game.title): comet could not start (\(error.localizedDescription)); playing without achievements")
+            comet.stop(nil)
+            return nil
+        }
+    }
+
+    /// A pop-up for each achievement comet unlocks, for as long as that comet runs: its log says
+    /// which, its database says the rest. Ends by itself once comet has stopped, whichever way
+    /// the launch ended.
+    private func watchAchievements(of game: GOGStore.InstalledGame, item: LibraryItem, bottleName: String, comet: Process, log: URL) {
+        let store = gogStore
+        Task.detached { [weak self] in
+            let reader = GOGAchievements.LogReader(log: log)
+            var clientID: String??
+            var shown: Set<String> = []
+            while true {
+                let running = comet.isRunning   // read before the log, so the last lines are never missed
+                let unlocks = reader.newUnlocks().filter { shown.insert($0.key).inserted }
+                if !unlocks.isEmpty {
+                    if clientID == nil { clientID = GOGSaves(store: store).clientID(for: game) }
+                    let database = clientID.flatMap { $0 }.flatMap { GOGComet(store: store).achievementDatabase(clientID: $0) }
+                    for unlock in unlocks {
+                        let achievement = GOGAchievements.details(key: unlock.key, name: unlock.name, database: database)
+                        await self?.achievementUnlocked(achievement, item: item, bottleName: bottleName)
+                    }
+                }
+                if !running { return }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func achievementUnlocked(_ achievement: GOGAchievement, item: LibraryItem, bottleName: String) {
+        appendLog("\(item.title): achievement unlocked, “\(achievement.name)”")
+        guard AchievementToast.isEnabled else { return }
+        // The game's window, so the card lands on it: windowed, full screen or borderless.
+        let session = runningSessions.first { $0.libraryID == item.id && $0.bottleName == bottleName }
+        let prefix = bottles.first { $0.name == bottleName }?.url
+        Task {
+            var window: CGRect?
+            if let session, let prefix {
+                window = await Task.detached { Self.largestWindow(of: SessionWatch.pids(ofPrefix: prefix, markers: session.markers)) }.value
+            }
+            AchievementToast.shared.show(achievement, gameWindow: window)
+        }
+    }
+
+    /// The biggest ordinary window on screen among these processes, in CGWindowList's coordinates.
+    nonisolated private static func largestWindow(of pids: [pid_t]) -> CGRect? {
+        guard !pids.isEmpty,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let wanted = Set(pids)
+        return windows.compactMap { info -> CGRect? in
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, wanted.contains(pid),
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: bounds)
+        }.max { $0.width * $0.height < $1.width * $1.height }
+    }
+
+    /// Settings' Preview: the pop-up as a game would show it.
+    func previewAchievementPopup() {
+        var sample = GOGAchievement(key: "HIGHBALL_PREVIEW", name: L("First Steps"))
+        sample.description = L("This is how an achievement shows up while you play.")
+        sample.rarity = 31
+        sample.rarityLevel = "Common"
+        AchievementToast.shared.show(sample)
+    }
+
+    /// The game's cloud-save folders in this environment, empty when it has none or GOG cannot say.
+    private func gogSaveLocations(_ game: GOGStore.InstalledGame, in bottle: Bottle) async -> [(GOGSaves.Location, URL)] {
+        let saves = GOGSaves(store: gogStore)
+        // Both can reach GOG (an offline install's client id comes from its build manifest).
+        let locations = await Task.detached { () -> [GOGSaves.Location]? in
+            guard let client = saves.clientID(for: game) else { return nil }
+            return (try? saves.locations(clientID: client)) ?? nil
+        }.value
+        return (locations ?? []).compactMap { location in
+            guard let folder = GOGSaves.resolve(location.template, game: game, driveC: bottle.driveC) else {
+                appendLog("\(game.title): cloud saves at \(location.template) have no folder here, skipping that one")
+                return nil
+            }
+            return (location, folder)
+        }
+    }
+
+    /// Answers the open save question once: the alert's buttons and its dismissal both land here,
+    /// and only the first answer reaches the waiting sync.
+    func resolveGOGSaveConflict(_ choice: GOGSaveConflict.Choice) {
+        guard let conflict = gogSaveConflict else { return }
+        gogSaveConflict = nil
+        conflict.resolve(choice)
+    }
+
+    /// One sync, asking the player on a conflict. Before Play the launch waits for the answer;
+    /// after the game it is asked whenever the player is back.
+    private func gogSync(_ game: GOGStore.InstalledGame, title: String, location: GOGSaves.Location, folder: URL,
+                         direction: GOGSaves.Direction, beforePlay: Bool) async throws {
+        let saves = GOGSaves(store: gogStore)
+        let outcome = await Task.detached { saves.sync(game, location: location, folder: folder, direction: direction) { line in
+            Task { @MainActor in self.appendLog(line) }
+        } }.value
+        switch outcome {
+        case .synced:
+            return
+        case let .failed(why):
+            appendLog("\(title): cloud saves did not sync (\(why)); \(beforePlay ? "playing with the saves on this Mac" : "they stay on this Mac until the next sync")")
+        case .conflict:
+            let choice: GOGSaveConflict.Choice = await withCheckedContinuation { continuation in
+                // One question at a time: an earlier one still open (another game's) is answered
+                // "decide later", which leaves both copies alone, so its launch never waits forever.
+                if let pending = gogSaveConflict {
+                    appendLog("\(pending.title): cloud saves left as they are this time (\(title) needed the question)")
+                    resolveGOGSaveConflict(.skip)
+                }
+                gogSaveConflict = GOGSaveConflict(title: title, beforePlay: beforePlay) { continuation.resume(returning: $0) }
+            }
+            let forced: GOGSaves.Direction
+            switch choice {
+            case .useCloud: forced = .forceDownload
+            case .keepMac: forced = .forceUpload
+            case .skip:
+                appendLog("\(title): cloud saves left as they are this time")
+                return
+            }
+            let again = await Task.detached { saves.sync(game, location: location, folder: folder, direction: forced) }.value
+            appendLog("\(title): cloud saves \(again == .synced ? (choice == .useCloud ? "replaced with GOG's copy" : "uploaded from this Mac") : "did not sync")")
+        }
+    }
+
+    func gogSetComet(_ on: Bool, for id: String) {
+        if on { gogSettings.cometOff[id] = nil } else { gogSettings.cometOff[id] = GOGSettings.turnedOff }
+        gogSettings.save(gogStore)
+    }
+
+    func gogSetCloudSaves(_ on: Bool, for id: String) {
+        if on { gogSettings.cloudSavesOff.remove(id) } else { gogSettings.cloudSavesOff.insert(id) }
+        gogSettings.save(gogStore)
+    }
+
+    func gogSetLaunchChoice(_ index: Int?, for id: String) {
+        gogSettings.launchChoice[id] = index
+        gogSettings.save(gogStore)
+        forgetProgramExecutables()
+        rebuildLibrary()   // a program added by hand shows its own tile only while the GOG tile plays another
+    }
+
+    /// Removes a GOG game from an environment: its own uninstaller first when an offline installer
+    /// left one (it cleans the registry), then the folder, then what gogdl kept about it.
+    private func gogUninstall(id: String, title: String, in bottle: Bottle) {
+        guard let game = gogInstalledByBottle[bottle.name]?.first(where: { $0.id == id }) else { return }
+        let store = gogStore
+        runBusy(String(format: L("Removing %@"), title),
+                done: DoneState(title: String(format: L("%@ removed"), title), ctaTitle: nil, cta: nil),
+                stop: .killBottle(bottle, label: L("Stop"))) { [self] in
+            let uninstaller = game.folder.appending(path: "unins000.exe")
+            if FileManager.default.fileExists(atPath: uninstaller.path), let engine = engine(for: bottle) {
+                stage = L("Running the game's own uninstaller")
+                appendLog("\(title): running its own uninstaller")
+                let runner = WineRunner(paths: paths, engine: engine, bottle: bottle)
+                _ = try? await runner.run([uninstaller.path, "/VERYSILENT", "/ProductId=\(id)", "/galaxyclient", "/KEEPSAVES"],
+                                          renderer: .wined3d, label: "gog-uninstall-\(id)")
+            }
+            if FileManager.default.fileExists(atPath: game.folder.path) {
+                // One call with no progress of its own, and a big game is tens of thousands of files.
+                stage = L("Deleting the game's files")
+                try await Task.detached { try FileManager.default.removeItem(at: game.folder) }.value
+            }
+            let elsewhere = gogInstalledByBottle.contains { $0.key != bottle.name && $0.value.contains { $0.id == id } }
+            store.forget(id, otherInstallsRemain: elsewhere)
+            GOGSaves(store: store).forget(game)
+            try? FileManager.default.removeItem(at: GOGStore.setupMarker(for: game, driveC: bottle.driveC))
+            appendLog("\(title): removed from \(bottle.name)")
+            refreshInstalledGames()   // the tile leaves now, not at the next folder watch
+        }
+    }
+
     func setDpi(_ scale: Int, retinaAt100: Bool? = nil, in bottle: Bottle) {
         guard let engine = engine(for: bottle) else { return }
         var copy = bottle
@@ -3393,6 +4055,9 @@ final class AppState {
     func killAllBottles() {
         for bottle in bottles { killBottle(bottle) }
     }
+
+    /// Quitting with Stop Everything: comet is a Mac process, outside the environments.
+    func stopGOGComets() { GOGComet(store: gogStore).stopStrays() }
 
     func loadGPTKLicense() {
         for candidate in [Self.repoRoot?.appending(path: "spike/d3dmetal-license.txt"),

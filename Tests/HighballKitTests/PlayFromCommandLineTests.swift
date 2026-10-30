@@ -7,7 +7,7 @@ import XCTest
 final class PlayFromCommandLineTests: XCTestCase {
     func testEveryLibraryIdNamesTheTargetItsLinkStarts() {
         let uuid = UUID(uuidString: "B43215E4-3490-4E8A-835B-3668A02B279F")!
-        let targets: [PlayLink.Target] = [.steam(appid: 2420510), .epic(appName: "Fortnite"),
+        let targets: [PlayLink.Target] = [.steam(appid: 2420510), .epic(appName: "Fortnite"), .gog(id: "1207658924"),
                                           .pin(bottle: "Games", id: uuid), .battlenet(product: "wow_classic"),
                                           .launcher(id: "ea-app")]
         for target in targets {
@@ -33,7 +33,7 @@ final class PlayFromCommandLineTests: XCTestCase {
 
     func testAnythingElseIsNotAnId() {
         for bad in ["", "steam", "steam:", "steam:0", "steam:-3", "steam:abc", "epic:", "pin:Games",
-                    "pin::B43215E4-3490-4E8A-835B-3668A02B279F", "pin:Games:not-a-uuid", "gog:123",
+                    "pin::B43215E4-3490-4E8A-835B-3668A02B279F", "pin:Games:not-a-uuid", "gog:", "gog:abc",
                     "launcher:Steam Client", "launcher:../x", "2420510", "battlenet:", "battlenet:../wow", "battlenet:wow classic"] {
             XCTAssertNil(PlayLink.Target(libraryID: bad), bad)
         }

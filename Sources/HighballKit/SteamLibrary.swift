@@ -334,10 +334,10 @@ public struct GameDB: Sendable {
         return String(kept).split(separator: " ").joined(separator: " ")
     }
 
-    /// The row for a library item, whatever store it came from: the Steam id first, then the
-    /// Epic app name, then the normalized title. Nil for a program the database does not know.
+    /// The row for a library item, whatever store it came from: the Steam id first (for a GOG copy,
+    /// the Steam id GOG's database gives it), then the Epic app name, then the normalized title. Nil for a program the database does not know.
     public func entry(for item: LibraryItem) -> GameDBEntry? {
-        if let appid = item.steamAppID, let e = byAppID[appid] { return e }
+        if let appid = item.steamAppID ?? item.gogSteamAppID, let e = byAppID[appid] { return e }
         if let name = item.epicAppName, let e = byEpicAppName[name] { return e }
         let normalized = Self.normalizedTitle(item.title)
         if let e = byTitle[normalized] { return e }

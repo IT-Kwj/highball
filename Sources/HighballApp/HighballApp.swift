@@ -148,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             state.killAllBottles()
+            state.stopGOGComets()
             return .terminateNow
         case .alertSecondButtonReturn:
             return .terminateNow
@@ -158,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         appState?.stopEpicInstall()
+        appState?.stopGOGInstall()
         DiscordPresence.shared.setEnabled(false)
         DiscordPresence.shared.stop()
     }
@@ -252,6 +254,8 @@ struct ContentView: View {
         .modesetTrialAsk(state)
         .homeMoveAsk(state)
         .sheet(isPresented: $state.showEpicSignIn) { EpicSignInSheet() }
+        .sheet(isPresented: $state.showGOGSignIn) { GOGSignInSheet() }
+        .gogSaveConflictAsk(state)
         .sheet(item: $state.engineTransition) { t in EngineTransitionSheet(transition: t) }
         #if DEBUG
         // Screenshot runs only: HB_SHOW_ENGINE_SWITCH="<environment>><engine id>" opens the switch
@@ -532,6 +536,22 @@ private extension View {
             Button(L("Cancel"), role: .cancel) { state.pendingUninstall = nil }
         } message: { pending in
             Text(Uninstall.confirmation(route: pending.route, sizeOnDisk: pending.item.sizeOnDisk))
+        }
+    }
+
+    /// Both this Mac's saves and GOG's changed since the last sync (GOGSaves): nothing moved, and
+    /// the player picks the copy that wins. Before Play the launch waits for this answer.
+    @MainActor func gogSaveConflictAsk(_ state: AppState) -> some View {
+        self.alert(state.gogSaveConflict.map { String(format: L("Which %@ saves should win?"), $0.title) } ?? "",
+                   isPresented: .init(get: { state.gogSaveConflict != nil }, set: { if !$0 { state.resolveGOGSaveConflict(.skip) } }),
+                   presenting: state.gogSaveConflict) { _ in
+            Button(L("Use GOG's cloud saves")) { state.resolveGOGSaveConflict(.useCloud) }
+            Button(L("Keep this Mac's saves")) { state.resolveGOGSaveConflict(.keepMac) }
+            Button(L("Decide later"), role: .cancel) { state.resolveGOGSaveConflict(.skip) }
+        } message: { conflict in
+            Text(conflict.beforePlay
+                 ? L("The saves on this Mac and the ones in GOG's cloud have both changed since they were last in step, so neither was copied. The copy you don't pick is replaced. Decide later plays with this Mac's saves and leaves the cloud alone.")
+                 : L("The saves on this Mac and the ones in GOG's cloud have both changed since they were last in step, so neither was copied. The copy you don't pick is replaced. Decide later leaves both as they are until the next time you play."))
         }
     }
 

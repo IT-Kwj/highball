@@ -34,6 +34,17 @@ enum L10n {
         "Connect your Epic account to see and download your games.": "Connectez votre compte Epic pour voir et télécharger vos jeux.",
         "Choose an .exe, .msi or .bat file, or drop it on this window.": "Choisissez un fichier .exe, .msi ou .bat, ou déposez-le sur cette fenêtre.",
         "Share game activity with Discord": "Partager l’activité de jeu avec Discord",
+        "Achievement unlocked": "Succès débloqué",
+        "%@%% of players": "%@ %% des joueurs",
+        "Common": "Courant",
+        "Uncommon": "Peu courant",
+        "Epic": "Épique",
+        "Legendary": "Légendaire",
+        "First Steps": "Premiers pas",
+        "This is how an achievement shows up while you play.": "Voici comment un succès apparaît pendant que vous jouez.",
+        "Show achievement pop-ups": "Afficher les succès débloqués",
+        "Preview": "Aperçu",
+        "When a GOG game unlocks an achievement, its badge shows in the corner of the screen for a few seconds, with a sound. The game keeps focus.": "Quand un jeu GOG débloque un succès, son badge s’affiche quelques secondes dans le coin de l’écran, avec un son. Le jeu garde la main.",
         "Let Discord show what you play and the game's Rich Presence while both apps are open. Off by default.": "Autoriser Discord à afficher vos jeux et leur Rich Presence lorsque les deux applications sont ouvertes. Désactivé par défaut.",
         "Frame generation (Lossless Scaling, beta)": "Génération d’images (Lossless Scaling, bêta)",
         "How frame generation works": "Comment fonctionne la génération d’images",
@@ -152,6 +163,82 @@ enum L10n {
         "Connect": "Connecter",
         "Connecting your Epic account": "Connexion de votre compte Epic",
         "Loading your Epic library…": "Chargement de votre bibliothèque Epic…",
+        "Connect your GOG account to see and download your games.": "Connectez votre compte GOG pour voir et télécharger vos jeux.",
+        "Connect GOG account…": "Connecter un compte GOG…",
+        "GOG account connected": "Compte GOG connecté",
+        "Connect GOG": "Connecter GOG",
+        "Connect your GOG account. Your games install straight into Highball.": "Connectez votre compte GOG. Vos jeux s'installent directement dans Highball.",
+        "Connect your GOG account": "Connecter votre compte GOG",
+        "It takes about a minute. You sign in on GOG's own website, so Highball never sees your password.":
+            "Cela prend environ une minute. Vous vous connectez sur le site de GOG, Highball ne voit donc jamais votre mot de passe.",
+        "Connected as %@": "Connecté en tant que %@",
+        "Manage…": "Gérer…",
+        "Your GOG account": "Votre compte GOG",
+        "To use a different GOG account, follow the steps again and sign in with it. You sign in on GOG's own website, so Highball never sees your password.":
+            "Pour utiliser un autre compte GOG, refaites les étapes et connectez-vous avec. Vous vous connectez sur le site de GOG, Highball ne voit donc jamais votre mot de passe.",
+        "Sign in to GOG in your browser.": "Connectez-vous à GOG dans votre navigateur.",
+        "Open GOG sign-in": "Ouvrir la connexion GOG",
+        "After you sign in, GOG shows an almost empty page. That is normal: it means it worked.":
+            "Une fois connecté, GOG affiche une page presque vide. C'est normal : cela veut dire que ça a marché.",
+        "Copy that page's link: click the address bar at the top of your browser, then press ⌘C.":
+            "Copiez le lien de cette page : cliquez sur la barre d'adresse en haut du navigateur, puis appuyez sur ⌘C.",
+        "Come back here and paste it.": "Revenez ici et collez-le.",
+        "or paste the link here": "ou collez le lien ici",
+        "Connecting to GOG…": "Connexion à GOG…",
+        "Highball connects through gogdl, the open source tool the Heroic launcher uses. You can disconnect at any time.":
+            "Highball se connecte avec gogdl, l'outil libre qu'utilise Heroic. Vous pouvez vous déconnecter à tout moment.",
+        "That is the right link. Click Connect.": "C'est le bon lien. Cliquez sur Connecter.",
+        "That is the link of the sign-in page. Sign in on that page first, then copy the link of the almost empty page you land on.":
+            "C'est le lien de la page de connexion. Connectez-vous d'abord sur cette page, puis copiez le lien de la page presque vide qui s'affiche.",
+        "That is a GOG page, but not the right one. Copy the link of the almost empty page GOG shows right after you sign in.":
+            "C'est une page GOG, mais pas la bonne. Copiez le lien de la page presque vide que GOG affiche juste après la connexion.",
+        "That does not look like a link from GOG. Copy the link of the almost empty page GOG shows after you sign in.":
+            "Ce lien ne semble pas venir de GOG. Copiez le lien de la page presque vide que GOG affiche après la connexion.",
+        "Highball could not download the small tool it uses to connect to GOG. Check your internet connection, then try again.":
+            "Highball n'a pas pu télécharger le petit outil qui lui sert à se connecter à GOG. Vérifiez votre connexion Internet, puis réessayez.",
+        "Disconnect GOG": "Déconnecter GOG",
+        "Highball is still busy with “%@”. Remove %@ once that has finished, or stop it in the bar at the bottom.":
+            "Highball est encore occupé par « %@ ». Supprimez %@ une fois cette opération terminée, ou arrêtez-la dans la barre en bas.",
+        "Available once “%@” has finished.": "Disponible une fois « %@ » terminé.",
+        "Running the game's own uninstaller": "Exécution du désinstalleur du jeu",
+        "Deleting the game's files": "Suppression des fichiers du jeu",
+        "Highball could not finish connecting to GOG. Check your internet connection, then try again.":
+            "Highball n'a pas pu terminer la connexion à GOG. Vérifiez votre connexion Internet, puis réessayez.",
+        "That link has expired or was already used. Click Open GOG sign-in again: GOG gives you a fresh link straight away, often without asking for your password.":
+            "Ce lien a expiré ou a déjà servi. Cliquez à nouveau sur Ouvrir la connexion GOG : GOG vous donne aussitôt un nouveau lien, souvent sans redemander votre mot de passe.",
+        "Achievements": "Succès",
+        "Cloud saves": "Sauvegardes dans le cloud",
+        "Sync saves with GOG": "Synchroniser les sauvegardes avec GOG",
+        "Achievements and stats (comet)": "Succès et statistiques (comet)",
+        "comet stands in for GOG Galaxy while the game runs, so achievements, stats and play time reach your GOG account. If the game won't start with it, Highball starts it again without.":
+            "comet remplace GOG Galaxy pendant que le jeu tourne, pour que les succès, les statistiques et le temps de jeu arrivent sur votre compte GOG. Si le jeu ne démarre pas avec, Highball le relance sans.",
+        "Turned off after the game closed at once with comet running and then started fine without it. Turn it back on to try again.":
+            "Désactivé : le jeu s'est fermé aussitôt avec comet, puis a bien démarré sans. Réactivez-le pour réessayer.",
+        "Saves come down from GOG's cloud before Play and go back up when the game ends. If both copies changed, Highball asks which one wins.":
+            "Les sauvegardes sont récupérées du cloud GOG avant de jouer et y retournent à la fin de la partie. Si les deux copies ont changé, Highball vous demande laquelle garder.",
+        "Launch option": "Option de lancement",
+        "GOG's default": "Choix par défaut de GOG",
+        "Version": "Version",
+        "GOG build %@": "Build GOG %@",
+        "Update from GOG": "Mettre à jour depuis GOG",
+        "Downloads only what changed since this build. Nothing happens when it is already the newest.":
+            "Ne télécharge que ce qui a changé depuis ce build. Rien ne se passe s'il est déjà le plus récent.",
+        "Which %@ saves should win?": "Quelles sauvegardes de %@ garder ?",
+        "Use GOG's cloud saves": "Utiliser les sauvegardes du cloud GOG",
+        "Keep this Mac's saves": "Garder les sauvegardes de ce Mac",
+        "Decide later": "Décider plus tard",
+        "The saves on this Mac and the ones in GOG's cloud have both changed since they were last in step, so neither was copied. The copy you don't pick is replaced. Decide later plays with this Mac's saves and leaves the cloud alone.":
+            "Les sauvegardes de ce Mac et celles du cloud GOG ont toutes deux changé depuis leur dernière synchronisation, donc aucune n'a été copiée. La copie que vous ne choisissez pas est remplacée. Décider plus tard lance le jeu avec les sauvegardes de ce Mac sans toucher au cloud.",
+        "The saves on this Mac and the ones in GOG's cloud have both changed since they were last in step, so neither was copied. The copy you don't pick is replaced. Decide later leaves both as they are until the next time you play.":
+            "Les sauvegardes de ce Mac et celles du cloud GOG ont toutes deux changé depuis leur dernière synchronisation, donc aucune n'a été copiée. La copie que vous ne choisissez pas est remplacée. Décider plus tard laisse les deux telles quelles jusqu'à votre prochaine partie.",
+        "Installing %@": "Installation de %@",
+        "Updating %@": "Mise à jour de %@",
+        "Starting %@": "Lancement de %@",
+        "Asking GOG about the download": "Demande des informations de téléchargement à GOG",
+        "Fetching the Windows runtimes the game needs": "Récupération des composants Windows nécessaires au jeu",
+        "Setting up %@: %@ (%d of %d)": "Configuration de %@ : %@ (%d sur %d)",
+        "Bringing your saves down from GOG": "Récupération de vos sauvegardes depuis GOG",
+        "Starting comet for achievements": "Démarrage de comet pour les succès",
         "Advanced": "Avancé",
         "Enable DLSS (MetalFX)": "Activer DLSS (MetalFX)",
         "Lets games that support DLSS use the MetalFX translation in DXMT or D3DMetal. Turn DLSS on in the game's own graphics settings too. Stop and relaunch the environment after changing this.":
@@ -451,7 +538,7 @@ enum L10n {
         "Also installed in": "Aussi installé dans",
         "An installer or game from your Mac. Or drop it onto this window.": "Un installateur ou un jeu présent sur votre Mac. Ou déposez-le sur cette fenêtre.",
         "Apply the %@ fix now": "Appliquer le correctif %@ maintenant",
-        "Battle.net, GOG Galaxy, the EA app, Ubisoft Connect and Rockstar are under Add games.": "Battle.net, GOG Galaxy, l'app EA, Ubisoft Connect et Rockstar sont sous Ajouter des jeux.",
+        "Battle.net, the EA app, Ubisoft Connect and Rockstar are under Add games.": "Battle.net, l'app EA, Ubisoft Connect et Rockstar sont sous Ajouter des jeux.",
         "Blocked": "Bloqué",
         "Blocked on the current engine: ": "Bloqué sur le moteur actuel : ",
         "Choose a file…": "Choisir un fichier…",
