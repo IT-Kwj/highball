@@ -3221,6 +3221,27 @@ final class AppState {
         return EpicStore.isInstalled(path: path, inDriveC: bottle.driveC)
     }
 
+    /// Moves one installed Epic game into another environment, where it then plays with that
+    /// environment's engine and settings while its other games stay put (highball#566: a player
+    /// testing one game on Wine 11 had to edit Legendary's files by hand). The game's home is its
+    /// folder, so moving the folder is the whole move.
+    func moveEpicGame(_ item: LibraryItem, to dest: Bottle) {
+        guard let appName = item.epicAppName, let path = epicInstalls[appName] else { return }
+        if runningSessions.contains(where: { $0.libraryID == item.id }) {
+            fail(HighballError.failed(String(format: L("%@ is running. Quit it first, then move it."), item.title)))
+            return
+        }
+        runBusy(String(format: L("Moving %@ to '%@'"), item.title, dest.name),
+                done: DoneState(title: String(format: L("%@ now plays in '%@'"), item.title, dest.name), ctaTitle: nil, cta: nil)) { [self] in
+            let store = epicStore
+            let refused = try await Task.detached {
+                try store.move(appName, from: path, into: dest) { line in Task { @MainActor in self.appendLog(line) } }
+            }.value
+            await MainActor.run { self.epicRefresh() }
+            if let refused { throw HighballError.failed(String(format: L("%@ could not move. %@"), item.title, refused)) }
+        }
+    }
+
     func epicSignIn(code: String) {
         runBusy(L("Connecting your Epic account"), stop: .cancelTask(label: L("Stop"))) { [self] in
             let store = epicStore

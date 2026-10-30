@@ -570,6 +570,17 @@ struct GameDetailView: View {
                             Text(L("Environment")).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
                             Text(bottle.name).font(.callout)
                             NavigationLink(L("Environment settings…"), value: EnvironmentSettingsDestination(name: bottle.name)).controlSize(.small)
+                            // An Epic game lives where its folder is, so it can move alone, where the
+                            // engine switch moves every game of the environment (highball#566).
+                            if item.source == .epic, item.installed, state.bottles.count > 1 {
+                                Menu(L("Move to…")) {
+                                    ForEach(state.bottles.filter { $0.name != bottle.name }, id: \.name) { other in
+                                        Button(other.name) { state.moveEpicGame(item, to: other) }
+                                    }
+                                }
+                                .controlSize(.small).fixedSize().disabled(state.busy || running != nil)
+                                .help(L("Moves this game's folder into another environment, where it plays with that environment's engine and settings. Its other games stay where they are. Saves the game keeps in the environment's user folders stay behind, unless Epic keeps them in the cloud."))
+                            }
                         }
                         // Another copy plays from its own environment; once played there, the
                         // tile follows it (highball#264).
